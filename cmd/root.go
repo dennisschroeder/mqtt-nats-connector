@@ -17,12 +17,21 @@ var (
 	mqttBroker string
 	clientID   string
 	mirrorTopics string
+	logLevel   string
 )
 
 var rootCmd = &cobra.Command{
 	Use:   "mqtt-nats-connector",
 	Short: "Mirror MQTT topics to NATS JetStream",
 	Run: func(cmd *cobra.Command, args []string) {
+		// Setup structured logging
+		var level slog.Level
+		if err := level.UnmarshalText([]byte(logLevel)); err != nil {
+			level = slog.LevelInfo
+		}
+		logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
+		slog.SetDefault(logger)
+
 		mClient, err := mqtt.NewClient(mqttBroker, clientID)
 		if err != nil {
 			slog.Error("Failed to connect to MQTT", "error", err)
@@ -56,4 +65,5 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&mqttBroker, "mqtt-broker", "tcp://mosquitto.iot:1883", "MQTT Broker")
 	rootCmd.PersistentFlags().StringVar(&clientID, "client-id", "mqtt-nats-connector", "Client ID")
 	rootCmd.PersistentFlags().StringVar(&mirrorTopics, "topics", "presence/#,waste/#", "Comma-separated topics to mirror")
+	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 }

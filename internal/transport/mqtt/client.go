@@ -1,7 +1,6 @@
 package mqtt
 
 import (
-	"fmt"
 	"log/slog"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"

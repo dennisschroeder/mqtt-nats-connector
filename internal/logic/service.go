@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	iotv1 "github.com/dennisschroeder/homelab-gitops/gen/go/iot/v1"
+	iotv1 "github.com/dennisschroeder/mqtt-nats-connector/gen/go/iot/v1"
 	"github.com/dennisschroeder/mqtt-nats-connector/internal/transport/mqtt"
 	"github.com/dennisschroeder/mqtt-nats-connector/internal/transport/nats"
 	"google.golang.org/protobuf/proto"

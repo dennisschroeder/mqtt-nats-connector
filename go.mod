@@ -2,8 +2,6 @@ module github.com/dennisschroeder/mqtt-nats-connector
 
 go 1.26.1
 
-replace github.com/dennisschroeder/homelab-gitops => /Users/dennisschroder/private/homelab/homelab-gitops
-
 require (
 	github.com/dennisschroeder/homelab-gitops v0.0.0-00010101000000-000000000000
 	github.com/eclipse/paho.mqtt.golang v1.5.1
@@ -24,3 +22,5 @@ require (
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 )
+
+replace github.com/dennisschroeder/homelab-gitops => ./third_party/homelab-gitops

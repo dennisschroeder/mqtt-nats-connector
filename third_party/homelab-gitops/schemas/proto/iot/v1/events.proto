@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package iot.v1;
+
+option go_package = "github.com/dennisschroeder/homelab-gitops/gen/go/iot/v1";
+
+import "google/protobuf/timestamp.proto";
+
+// Generic Sensor Event (MQTT -> NATS Mirror)
+// v1.0.0
+message SensorEvent {
+  string id = 1;              // Unique Event ID (CloudEvent style)
+  string source = 2;          // e.g., "asto-waste2mqtt"
+  string entity_id = 3;       // e.g., "sensor.waste_tomorrow"
+  string value = 4;           // Raw string value
+  double numeric_value = 5;   // Parsed numeric value (if applicable)
+  string unit = 6;            // e.g., "days", "°C", "W"
+  google.protobuf.Timestamp timestamp = 7;
+}
+
+// Action Request (NATS -> Logic -> MQTT/Actor)
+message ActionRequest {
+  string id = 1;
+  string target_entity = 2;   // e.g., "light.kitchen"
+  string action = 3;          // e.g., "turn_on", "set_brightness"
+  map<string, string> params = 4;
+  google.protobuf.Timestamp expires_at = 5;
+}

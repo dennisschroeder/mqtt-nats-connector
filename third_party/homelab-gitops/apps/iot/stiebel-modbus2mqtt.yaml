@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stiebel-modbus2mqtt
+  namespace: iot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stiebel-modbus2mqtt
+  template:
+    metadata:
+      labels:
+        app: stiebel-modbus2mqtt
+    spec:
+      imagePullSecrets:
+      - name: ghcr-secret
+      containers:
+      - name: bridge
+        image: ghcr.io/dennisschroeder/stiebel-eltron-modbus2mqtt:main
+        imagePullPolicy: Always
+        args:
+        - "--modbus-host=192.168.178.198"
+        - "--modbus-port=502"
+        - "--mqtt-host=mosquitto.mqtt.svc.cluster.local"
+        - "--mqtt-port=1883"
+        - "--mqtt-client-id=stiebel-modbus2mqtt-go"

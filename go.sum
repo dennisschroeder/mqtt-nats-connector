@@ -1,6 +1,6 @@
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
-github.com/dennisschroeder/iot-schemas-proto v0.2.0 h1:el0IrrjGLbETQB7E6a2PClrPF7znzO1wJqliQNqYyq8=
-github.com/dennisschroeder/iot-schemas-proto v0.2.0/go.mod h1:6lc3f+8kWcxh0hLZ29jPg9fibspcm7BJBAfPilFHo2g=
+github.com/dennisschroeder/iot-schemas-proto v0.2.1-0.20260325202230-38039d7586b5 h1:9tUL1Fo0iRCGMRebXKsCfB5uH5Jav7urLQNsgo8/bGo=
+github.com/dennisschroeder/iot-schemas-proto v0.2.1-0.20260325202230-38039d7586b5/go.mod h1:6lc3f+8kWcxh0hLZ29jPg9fibspcm7BJBAfPilFHo2g=
 github.com/dennisschroeder/iot-utils-go v0.2.0 h1:0EgHG++eDqcdQABdQ9Kyr4/QLsatyIRFN3zD69SOxhw=
 github.com/dennisschroeder/iot-utils-go v0.2.0/go.mod h1:94c+SHxRowNn5GC31CiCVKWBA+gpoU4VE+9WV/fnpFE=
 github.com/eclipse/paho.mqtt.golang v1.5.1 h1:/VSOv3oDLlpqR2Epjn1Q7b2bSTplJIeV2ISgCl2W7nE=

@@ -43,9 +43,22 @@ func (s *Service) Run(ctx context.Context) error {
 			// 1. Determine Source and DeviceID
 			source := "unknown"
 			deviceID := mqttTopic
+			eventType := "state"
+
 			if strings.HasPrefix(mqttTopic, "zigbee/") {
 				source = "zigbee"
-				deviceID = strings.TrimPrefix(mqttTopic, "zigbee/")
+				trimmed := strings.TrimPrefix(mqttTopic, "zigbee/")
+				parts := strings.Split(trimmed, "/")
+				deviceID = parts[0]
+				if len(parts) > 1 {
+					eventType = strings.Join(parts[1:], "/")
+				}
+			}
+
+			// Ignore non-state events for Zigbee (like availability or bridge/#)
+			if source == "zigbee" && (eventType != "state" || deviceID == "bridge") {
+				slog.Debug("Ignoring non-state or bridge event", "topic", mqttTopic, "event_type", eventType)
+				return
 			}
 
 			// 2. Resolve Area via iot-utils-go (ADR 009)

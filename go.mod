@@ -1,6 +1,6 @@
 module github.com/dennisschroeder/mqtt-nats-connector
 
-go 1.24
+go 1.24.0
 
 require (
 	github.com/dennisschroeder/iot-schemas-proto v0.2.0

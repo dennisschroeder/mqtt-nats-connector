@@ -78,6 +78,8 @@ func (s *Service) Run(ctx context.Context) error {
 				domain = "presence"
 			case *iotv1.EventEnvelope_Light:
 				domain = "light"
+			case *iotv1.EventEnvelope_Sensor:
+				domain = "sensor"
 			}
 
 			// 5. Construct NATS Subject (ADR 010)
@@ -114,7 +116,7 @@ func (s *Service) transformZ2M(topic, deviceID string, payload []byte) *iotv1.Ev
 
 	envelope := &iotv1.EventEnvelope{}
 
-	// Detection logic: PIR vs Light
+	// Detection logic: PIR vs Light vs Raw Fallback
 	if strings.Contains(deviceID, "motion") || strings.Contains(deviceID, "presence") || strings.Contains(string(payload), "occupancy") {
 		state := iotv1.BinaryState_BINARY_STATE_OFF
 		if data.Occupancy {
@@ -126,7 +128,7 @@ func (s *Service) transformZ2M(topic, deviceID string, payload []byte) *iotv1.Ev
 				State:    state,
 			},
 		}
-	} else {
+	} else if strings.Contains(string(payload), "\"state\"") || strings.Contains(string(payload), "\"brightness\"") {
 		state := iotv1.BinaryState_BINARY_STATE_OFF
 		if strings.ToUpper(data.State) == "ON" {
 			state = iotv1.BinaryState_BINARY_STATE_ON
@@ -138,6 +140,10 @@ func (s *Service) transformZ2M(topic, deviceID string, payload []byte) *iotv1.Ev
 				Brightness: data.Brightness / 255.0,
 			},
 		}
+	} else {
+		// Fallback for discovery mode
+		slog.Info("DISCOVERY MODE: Unmapped Z2M payload", "topic", topic, "deviceID", deviceID, "payload", string(payload))
+		return nil
 	}
 
 	return envelope

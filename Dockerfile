@@ -8,6 +8,7 @@ RUN apk add --no-cache git && \
     git config --global url."https://${GH_PAT}:x-oauth-basic@github.com/dennisschroeder".insteadOf "https://github.com/dennisschroeder"
 
 ENV GOPRIVATE=github.com/dennisschroeder/*
+ENV GOSUMDB=off
 
 WORKDIR /app
 COPY go.mod go.sum ./

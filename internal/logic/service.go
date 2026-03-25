@@ -71,9 +71,18 @@ func (s *Service) Run(ctx context.Context) error {
 			eventEnvelope.Topic = mqttTopic
 			eventEnvelope.Timestamp = timestamppb.Now()
 
+			// 4.5 Determine Domain
+			domain := "unknown"
+			switch eventEnvelope.Payload.(type) {
+			case *iotv1.EventEnvelope_Presence:
+				domain = "presence"
+			case *iotv1.EventEnvelope_Light:
+				domain = "light"
+			}
+
 			// 5. Construct NATS Subject (ADR 010)
-			// Format: iot.v1.events.<source>.<area>.<device_id>
-			natsSubject := fmt.Sprintf("iot.v1.events.%s.%s.%s", source, areaSlug, deviceID)
+			// Format: iot.v1.events.<source>.<area>.<domain>.<device_id>
+			natsSubject := fmt.Sprintf("iot.v1.events.%s.%s.%s.%s", source, areaSlug, domain, deviceID)
 			natsSubject = strings.ReplaceAll(natsSubject, "/", ".")
 
 			data, err := proto.Marshal(eventEnvelope)

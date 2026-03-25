@@ -31,6 +31,7 @@ func (s *Service) Run(ctx context.Context) error {
 	for _, topic := range s.topics {
 		slog.Info("Mirroring topic", "topic", topic)
 		err := s.mqtt.Subscribe(topic, func(mqttTopic string, payload []byte) {
+			slog.Debug("Received MQTT message", "topic", mqttTopic, "payload_len", len(payload))
 			var eventEnvelope *iotv1.EventEnvelope
 
 			// Minimal transformation logic for PIR
@@ -77,6 +78,7 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 
 			subject := "iot.events.walkthrough"
+			slog.Info("Publishing NATS event", "subject", subject, "source", eventEnvelope.Source, "topic", eventEnvelope.Topic)
 			if err := s.nats.Publish(subject, data); err != nil {
 				slog.Error("Failed to publish to NATS", "subject", subject, "error", err)
 			}

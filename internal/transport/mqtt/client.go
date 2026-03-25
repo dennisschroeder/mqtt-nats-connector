@@ -16,7 +16,9 @@ func NewClient(broker, clientID string) (*Client, error) {
 	opts := mqtt.NewClientOptions().
 		AddBroker(broker).
 		SetClientID(clientID).
-		SetAutoReconnect(true)
+		SetAutoReconnect(true).
+		SetCleanSession(false).
+		SetResumeSubs(true)
 
 	client := mqtt.NewClient(opts)
 	if token := client.Connect(); token.Wait() && token.Error() != nil {

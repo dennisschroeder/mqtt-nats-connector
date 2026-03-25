@@ -1,7 +1,14 @@
 FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
 ARG TARGETOS
 ARG TARGETARCH
-RUN apk add --no-cache git
+ARG GH_PAT
+
+# Configure Git for private modules
+RUN apk add --no-cache git && \
+    git config --global url."https://${GH_PAT}:x-oauth-basic@github.com/dennisschroeder".insteadOf "https://github.com/dennisschroeder"
+
+ENV GOPRIVATE=github.com/dennisschroeder/*
+
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download

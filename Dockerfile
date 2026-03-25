@@ -7,8 +7,9 @@ ARG GH_PAT
 RUN apk add --no-cache git && \
     git config --global url."https://${GH_PAT}:x-oauth-basic@github.com/dennisschroeder".insteadOf "https://github.com/dennisschroeder"
 
-ENV GOPRIVATE=github.com/dennisschroeder/*
+# Disable checksum DB during build
 ENV GOSUMDB=off
+ENV GOPRIVATE=github.com/dennisschroeder/*
 
 WORKDIR /app
 COPY go.mod go.sum ./

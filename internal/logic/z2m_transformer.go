@@ -8,10 +8,18 @@ import (
 	iotv1 "github.com/dennisschroeder/iot-schemas-proto/gen/go/iot/v1"
 )
 
+type Z2MColor struct {
+	X float32 `json:"x"`
+	Y float32 `json:"y"`
+}
+
 type Z2MPayload struct {
-	Occupancy  bool    `json:"occupancy"`
-	State      string  `json:"state"`
-	Brightness float32 `json:"brightness"`
+	Occupancy  bool       `json:"occupancy"`
+	State      string     `json:"state"`
+	Brightness float32    `json:"brightness"`
+	ColorTemp  int32      `json:"color_temp"`
+	ColorMode  string     `json:"color_mode"`
+	Color      *Z2MColor  `json:"color,omitempty"`
 }
 
 type Z2MTransformer struct{}
@@ -60,12 +68,29 @@ func (t *Z2MTransformer) Transform(topic string, payload []byte) (string, string
 		if strings.ToUpper(data.State) == "ON" {
 			state = iotv1.BinaryState_BINARY_STATE_ON
 		}
+		lightEvt := &iotv1.LightEvent{
+			EntityId:   deviceID,
+			State:      state,
+			Brightness: data.Brightness / 255.0,
+		}
+
+		if data.ColorTemp > 0 {
+			v := data.ColorTemp
+			lightEvt.ColorTemp = &v
+		}
+		if data.ColorMode != "" {
+			v := data.ColorMode
+			lightEvt.ColorMode = &v
+		}
+		if data.Color != nil {
+			lightEvt.Color = &iotv1.ColorXY{
+				X: data.Color.X,
+				Y: data.Color.Y,
+			}
+		}
+
 		envelope.Payload = &iotv1.EventEnvelope_Light{
-			Light: &iotv1.LightEvent{
-				EntityId:   deviceID,
-				State:      state,
-				Brightness: data.Brightness / 255.0,
-			},
+			Light: lightEvt,
 		}
 	} else {
 		// Fallback for discovery mode

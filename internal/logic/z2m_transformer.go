@@ -14,12 +14,12 @@ type Z2MColor struct {
 }
 
 type Z2MPayload struct {
-	Occupancy  bool       `json:"occupancy"`
-	State      string     `json:"state"`
-	Brightness float32    `json:"brightness"`
-	ColorTemp  int32      `json:"color_temp"`
-	ColorMode  string     `json:"color_mode"`
-	Color      *Z2MColor  `json:"color,omitempty"`
+	Occupancy  *bool     `json:"occupancy"`
+	State      *string   `json:"state"`
+	Brightness *float32  `json:"brightness"`
+	ColorTemp  *int32    `json:"color_temp"`
+	ColorMode  *string   `json:"color_mode"`
+	Color      *Z2MColor `json:"color,omitempty"`
 }
 
 type Z2MTransformer struct{}
@@ -52,9 +52,9 @@ func (t *Z2MTransformer) Transform(topic string, payload []byte) (string, string
 	envelope := &iotv1.EventEnvelope{}
 
 	// Detection logic: PIR vs Light vs Raw Fallback
-	if strings.Contains(deviceID, "motion") || strings.Contains(deviceID, "presence") || strings.Contains(string(payload), "occupancy") {
+	if strings.Contains(deviceID, "motion") || strings.Contains(deviceID, "presence") || data.Occupancy != nil {
 		state := iotv1.BinaryState_BINARY_STATE_OFF
-		if data.Occupancy {
+		if data.Occupancy != nil && *data.Occupancy {
 			state = iotv1.BinaryState_BINARY_STATE_ON
 		}
 		envelope.Payload = &iotv1.EventEnvelope_Presence{
@@ -63,24 +63,28 @@ func (t *Z2MTransformer) Transform(topic string, payload []byte) (string, string
 				State:    state,
 			},
 		}
-	} else if strings.Contains(string(payload), "\"state\"") || strings.Contains(string(payload), "\"brightness\"") {
+	} else if data.State != nil || data.Brightness != nil {
 		state := iotv1.BinaryState_BINARY_STATE_OFF
-		if strings.ToUpper(data.State) == "ON" {
+		if data.State != nil && strings.ToUpper(*data.State) == "ON" {
 			state = iotv1.BinaryState_BINARY_STATE_ON
 		}
+
+		var brightness float32
+		if data.Brightness != nil {
+			brightness = *data.Brightness / 255.0
+		}
+
 		lightEvt := &iotv1.LightEvent{
 			EntityId:   deviceID,
 			State:      state,
-			Brightness: data.Brightness / 255.0,
+			Brightness: brightness,
 		}
 
-		if data.ColorTemp > 0 {
-			v := data.ColorTemp
-			lightEvt.ColorTemp = &v
+		if data.ColorTemp != nil {
+			lightEvt.ColorTemp = data.ColorTemp
 		}
-		if data.ColorMode != "" {
-			v := data.ColorMode
-			lightEvt.ColorMode = &v
+		if data.ColorMode != nil {
+			lightEvt.ColorMode = data.ColorMode
 		}
 		if data.Color != nil {
 			lightEvt.Color = &iotv1.ColorXY{

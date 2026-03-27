@@ -9,12 +9,12 @@ import (
 func TestHomematicTransformer(t *testing.T) {
 	transformer := &HomematicTransformer{}
 
-	if !transformer.Accepts("homematic-bridge/cover/OEQ1219312_1/position") {
-		t.Error("Expected to accept homematic-bridge/ topic")
+	if !transformer.Accepts("ccu2/cover/OEQ1219312_1/position") {
+		t.Error("Expected to accept ccu2/ topic")
 	}
 
-	src, devID, env := transformer.Transform("homematic-bridge/cover/OEQ1219312_1/position", []byte("100"))
-	if src != "homematic-bridge" {
+	src, devID, env := transformer.Transform("ccu2/cover/OEQ1219312_1/position", []byte("100"))
+	if src != "ccu2" {
 		t.Errorf("got source %q", src)
 	}
 	if devID != "OEQ1219312_1" {

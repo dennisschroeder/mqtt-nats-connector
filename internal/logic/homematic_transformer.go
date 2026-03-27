@@ -9,7 +9,7 @@ import (
 type HomematicTransformer struct{}
 
 func (t *HomematicTransformer) Accepts(topic string) bool {
-	return strings.HasPrefix(topic, "homematic-bridge/")
+	return strings.HasPrefix(topic, "ccu2/")
 }
 
 func (t *HomematicTransformer) Transform(topic string, payload []byte) (string, string, *iotv1.EventEnvelope) {
@@ -32,5 +32,5 @@ func (t *HomematicTransformer) Transform(topic string, payload []byte) (string, 
 			},
 		},
 	}
-	return "homematic-bridge", deviceID, envelope
+	return "ccu2", deviceID, envelope
 }

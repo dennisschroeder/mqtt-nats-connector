@@ -59,10 +59,26 @@ func TestZ2MTransformer(t *testing.T) {
 		{
 			name:         "Unknown payload (discovery mode)",
 			topic:        "zigbee/unknown_sensor",
-			payload:      []byte(`{"temperature":22.5}`),
+			payload:      []byte(`{"pressure":1013}`),
 			wantSource:   "zigbee",
 			wantDeviceID: "unknown_sensor",
 			wantPayload:  nil,
+		},
+		{
+			name:         "Temperature payload",
+			topic:        "zigbee/temp_sensor",
+			payload:      []byte(`{"temperature":22.5}`),
+			wantSource:   "zigbee",
+			wantDeviceID: "temp_sensor",
+			wantPayload:  &envelope.EventEnvelope_Sensor{},
+		},
+		{
+			name:         "Illuminance payload",
+			topic:        "zigbee/light_sensor",
+			payload:      []byte(`{"illuminance":650}`),
+			wantSource:   "zigbee",
+			wantDeviceID: "light_sensor",
+			wantPayload:  &envelope.EventEnvelope_Sensor{},
 		},
 	}
 
@@ -92,6 +108,10 @@ func TestZ2MTransformer(t *testing.T) {
 				case *envelope.EventEnvelope_Light:
 					if _, ok := env.Payload.(*envelope.EventEnvelope_Light); !ok {
 						t.Errorf("expected Light payload, got %T", env.Payload)
+					}
+				case *envelope.EventEnvelope_Sensor:
+					if _, ok := env.Payload.(*envelope.EventEnvelope_Sensor); !ok {
+						t.Errorf("expected Sensor payload, got %T", env.Payload)
 					}
 				}
 			}

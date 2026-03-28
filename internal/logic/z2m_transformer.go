@@ -2,6 +2,7 @@ package logic
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/common"
 	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/envelope"
 	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/light"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/sensor"
 )
 
 type Z2MColor struct {
@@ -17,12 +19,14 @@ type Z2MColor struct {
 }
 
 type Z2MPayload struct {
-	Occupancy  *bool     `json:"occupancy"`
-	State      *string   `json:"state"`
-	Brightness *float32  `json:"brightness"`
-	ColorTemp  *int32    `json:"color_temp"`
-	ColorMode  *string   `json:"color_mode"`
-	Color      *Z2MColor `json:"color,omitempty"`
+	Occupancy   *bool     `json:"occupancy"`
+	State       *string   `json:"state"`
+	Brightness  *float32  `json:"brightness"`
+	ColorTemp   *int32    `json:"color_temp"`
+	ColorMode   *string   `json:"color_mode"`
+	Color       *Z2MColor `json:"color,omitempty"`
+	Illuminance *float64  `json:"illuminance"`
+	Temperature *float64  `json:"temperature"`
 }
 
 type Z2MTransformer struct{}
@@ -104,6 +108,30 @@ func (t *Z2MTransformer) Transform(topic string, payload []byte) (string, string
 
 		event.Payload = &envelope.EventEnvelope_Light{
 			Light: lightEvt,
+		}
+	} else if data.Illuminance != nil {
+		// Map Illuminance to a generic SensorEvent
+		event.Payload = &envelope.EventEnvelope_Sensor{
+			Sensor: &sensor.SensorEvent{
+				Id:           deviceID + "_illuminance",
+				Source:       "zigbee",
+				EntityId:     deviceID,
+				Value:        fmt.Sprintf("%f", *data.Illuminance),
+				NumericValue: *data.Illuminance,
+				Unit:         "lx",
+			},
+		}
+	} else if data.Temperature != nil {
+		// Map Temperature to a generic SensorEvent
+		event.Payload = &envelope.EventEnvelope_Sensor{
+			Sensor: &sensor.SensorEvent{
+				Id:           deviceID + "_temperature",
+				Source:       "zigbee",
+				EntityId:     deviceID,
+				Value:        fmt.Sprintf("%f", *data.Temperature),
+				NumericValue: *data.Temperature,
+				Unit:         "°C",
+			},
 		}
 	} else {
 		// Fallback for discovery mode

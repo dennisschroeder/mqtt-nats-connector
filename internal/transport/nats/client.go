@@ -35,6 +35,10 @@ func (c *Client) Publish(subject string, data []byte) error {
 	return nil
 }
 
+func (c *Client) Subscribe(subject string, handler nats.MsgHandler) (*nats.Subscription, error) {
+	return c.nc.Subscribe(subject, handler)
+}
+
 func (c *Client) Close() {
 	c.nc.Close()
 }

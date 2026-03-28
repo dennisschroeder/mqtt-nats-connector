@@ -36,6 +36,12 @@ func (c *Client) Subscribe(topic string, handler MessageHandler) error {
 	return token.Error()
 }
 
+func (c *Client) Publish(topic string, payload []byte) error {
+	token := c.client.Publish(topic, 1, false, payload)
+	token.Wait()
+	return token.Error()
+}
+
 func (c *Client) Close() {
 	c.client.Disconnect(250)
 }

@@ -2,15 +2,19 @@ package logic
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/action"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/common"
 	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/envelope"
 	"github.com/dennisschroeder/iot-utils-go/pkg/areas"
 	"github.com/dennisschroeder/mqtt-nats-connector/internal/transport/mqtt"
 	"github.com/dennisschroeder/mqtt-nats-connector/internal/transport/nats"
+	natsgo "github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -108,6 +112,44 @@ func (s *Service) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+	}
+
+	// Action Egress: NATS -> MQTT
+	_, err := s.nats.Subscribe("iot.v1.actions.>", func(msg *natsgo.Msg) {
+		var req action.ActionRequest
+		if err := proto.Unmarshal(msg.Data, &req); err != nil {
+			slog.Error("Failed to unmarshal ActionRequest", "error", err)
+			return
+		}
+		
+		slog.Info("Received NATS action", "id", req.Id, "target", req.TargetEntity)
+		
+		if lightCmd := req.GetLight(); lightCmd != nil {
+			state := "OFF"
+			if lightCmd.State == common.BinaryState_BINARY_STATE_ON {
+				state = "ON"
+			}
+			
+			payload := map[string]interface{}{
+				"state": state,
+			}
+			if lightCmd.Brightness > 0 {
+				payload["brightness"] = int(lightCmd.Brightness * 255.0)
+			}
+			
+			data, _ := json.Marshal(payload)
+			// For simplicity we route all light actions to zigbee
+			topic := fmt.Sprintf("zigbee/%s/set", req.TargetEntity)
+			
+			slog.Info("Executing Light Action via MQTT", "topic", topic, "payload", string(data))
+			if err := s.mqtt.Publish(topic, data); err != nil {
+				slog.Error("Failed to publish MQTT action", "topic", topic, "error", err)
+			}
+		}
+	})
+	if err != nil {
+		slog.Error("Failed to subscribe to actions on NATS", "error", err)
+		return err
 	}
 
 	<-ctx.Done()

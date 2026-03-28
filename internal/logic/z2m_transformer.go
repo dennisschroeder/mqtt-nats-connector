@@ -35,7 +35,17 @@ func (t *Z2MTransformer) Accepts(topic string) bool {
 	return strings.HasPrefix(topic, "zigbee/")
 }
 
+// Single Transform interface implementation (fallback if Multi is not used, though it is)
 func (t *Z2MTransformer) Transform(topic string, payload []byte) (string, string, *envelope.EventEnvelope) {
+	source, deviceID, envs := t.TransformMulti(topic, payload)
+	if len(envs) > 0 {
+		return source, deviceID, envs[0]
+	}
+	return source, deviceID, nil
+}
+
+// TransformMulti extracts multiple events from a single JSON payload
+func (t *Z2MTransformer) TransformMulti(topic string, payload []byte) (string, string, []*envelope.EventEnvelope) {
 	trimmed := strings.TrimPrefix(topic, "zigbee/")
 	parts := strings.Split(trimmed, "/")
 	deviceID := parts[0]
@@ -56,9 +66,9 @@ func (t *Z2MTransformer) Transform(topic string, payload []byte) (string, string
 		return "zigbee", deviceID, nil
 	}
 
-	event := &envelope.EventEnvelope{}
+	var envelopes []*envelope.EventEnvelope
 
-	// Detection logic: PIR vs Light vs Raw Fallback
+	// Detection logic: PIR
 	if strings.Contains(deviceID, "motion") || strings.Contains(deviceID, "presence") || data.Occupancy != nil {
 		state := common.BinaryState_BINARY_STATE_OFF
 		if data.Occupancy != nil && *data.Occupancy {
@@ -69,14 +79,19 @@ func (t *Z2MTransformer) Transform(topic string, payload []byte) (string, string
 			deviceClass = "presence"
 		}
 
-		event.Payload = &envelope.EventEnvelope_BinarySensor{
-			BinarySensor: &binary_sensor.BinarySensorEvent{
-				EntityId:    deviceID,
-				State:       state,
-				DeviceClass: deviceClass,
+		envelopes = append(envelopes, &envelope.EventEnvelope{
+			Payload: &envelope.EventEnvelope_BinarySensor{
+				BinarySensor: &binary_sensor.BinarySensorEvent{
+					EntityId:    deviceID,
+					State:       state,
+					DeviceClass: deviceClass,
+				},
 			},
-		}
-	} else if data.State != nil || data.Brightness != nil {
+		})
+	}
+
+	// Detection logic: Light
+	if data.State != nil || data.Brightness != nil {
 		state := common.BinaryState_BINARY_STATE_OFF
 		if data.State != nil && strings.ToUpper(*data.State) == "ON" {
 			state = common.BinaryState_BINARY_STATE_ON
@@ -106,38 +121,50 @@ func (t *Z2MTransformer) Transform(topic string, payload []byte) (string, string
 			}
 		}
 
-		event.Payload = &envelope.EventEnvelope_Light{
-			Light: lightEvt,
-		}
-	} else if data.Illuminance != nil {
-		// Map Illuminance to a generic SensorEvent
-		event.Payload = &envelope.EventEnvelope_Sensor{
-			Sensor: &sensor.SensorEvent{
-				Id:           deviceID + "_illuminance",
-				Source:       "zigbee",
-				EntityId:     deviceID,
-				Value:        fmt.Sprintf("%f", *data.Illuminance),
-				NumericValue: *data.Illuminance,
-				Unit:         "lx",
+		envelopes = append(envelopes, &envelope.EventEnvelope{
+			Payload: &envelope.EventEnvelope_Light{
+				Light: lightEvt,
 			},
-		}
-	} else if data.Temperature != nil {
-		// Map Temperature to a generic SensorEvent
-		event.Payload = &envelope.EventEnvelope_Sensor{
-			Sensor: &sensor.SensorEvent{
-				Id:           deviceID + "_temperature",
-				Source:       "zigbee",
-				EntityId:     deviceID,
-				Value:        fmt.Sprintf("%f", *data.Temperature),
-				NumericValue: *data.Temperature,
-				Unit:         "°C",
+		})
+	}
+
+	// Detection logic: Illuminance Sensor
+	if data.Illuminance != nil {
+		envelopes = append(envelopes, &envelope.EventEnvelope{
+			Payload: &envelope.EventEnvelope_Sensor{
+				Sensor: &sensor.SensorEvent{
+					Id:           deviceID + "_illuminance",
+					Source:       "zigbee",
+					EntityId:     deviceID,
+					Value:        fmt.Sprintf("%f", *data.Illuminance),
+					NumericValue: *data.Illuminance,
+					Unit:         "lx",
+				},
 			},
-		}
-	} else {
+		})
+	}
+
+	// Detection logic: Temperature Sensor
+	if data.Temperature != nil {
+		envelopes = append(envelopes, &envelope.EventEnvelope{
+			Payload: &envelope.EventEnvelope_Sensor{
+				Sensor: &sensor.SensorEvent{
+					Id:           deviceID + "_temperature",
+					Source:       "zigbee",
+					EntityId:     deviceID,
+					Value:        fmt.Sprintf("%f", *data.Temperature),
+					NumericValue: *data.Temperature,
+					Unit:         "°C",
+				},
+			},
+		})
+	}
+
+	if len(envelopes) == 0 {
 		// Fallback for discovery mode
 		slog.Info("DISCOVERY MODE: Unmapped Z2M payload", "topic", topic, "deviceID", deviceID, "payload", string(payload))
 		return "zigbee", deviceID, nil
 	}
 
-	return "zigbee", deviceID, event
+	return "zigbee", deviceID, envelopes
 }

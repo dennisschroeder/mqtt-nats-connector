@@ -22,7 +22,7 @@ func TestZ2MTransformer(t *testing.T) {
 		payload      []byte
 		wantSource   string
 		wantDeviceID string
-		wantPayload  interface{} // nil means we expect envelope or payload to be nil
+		wantPayloads []interface{} // nil means we expect envelope or payload to be nil
 	}{
 		{
 			name:         "Motion event",
@@ -30,7 +30,7 @@ func TestZ2MTransformer(t *testing.T) {
 			payload:      []byte(`{"occupancy":true}`),
 			wantSource:   "zigbee",
 			wantDeviceID: "living_room_motion",
-			wantPayload:  &envelope.EventEnvelope_BinarySensor{},
+			wantPayloads: []interface{}{&envelope.EventEnvelope_BinarySensor{}},
 		},
 		{
 			name:         "Light event",
@@ -38,7 +38,7 @@ func TestZ2MTransformer(t *testing.T) {
 			payload:      []byte(`{"state":"ON","brightness":128}`),
 			wantSource:   "zigbee",
 			wantDeviceID: "living_room_light",
-			wantPayload:  &envelope.EventEnvelope_Light{},
+			wantPayloads: []interface{}{&envelope.EventEnvelope_Light{}},
 		},
 		{
 			name:         "Availability event (ignored)",
@@ -46,7 +46,7 @@ func TestZ2MTransformer(t *testing.T) {
 			payload:      []byte(`{"state":"online"}`),
 			wantSource:   "zigbee",
 			wantDeviceID: "living_room_light",
-			wantPayload:  nil,
+			wantPayloads: nil,
 		},
 		{
 			name:         "Bridge event (ignored)",
@@ -54,7 +54,7 @@ func TestZ2MTransformer(t *testing.T) {
 			payload:      []byte(`{"level":"info"}`),
 			wantSource:   "zigbee",
 			wantDeviceID: "bridge",
-			wantPayload:  nil,
+			wantPayloads: nil,
 		},
 		{
 			name:         "Unknown payload (discovery mode)",
@@ -62,7 +62,7 @@ func TestZ2MTransformer(t *testing.T) {
 			payload:      []byte(`{"pressure":1013}`),
 			wantSource:   "zigbee",
 			wantDeviceID: "unknown_sensor",
-			wantPayload:  nil,
+			wantPayloads: nil,
 		},
 		{
 			name:         "Temperature payload",
@@ -70,7 +70,7 @@ func TestZ2MTransformer(t *testing.T) {
 			payload:      []byte(`{"temperature":22.5}`),
 			wantSource:   "zigbee",
 			wantDeviceID: "temp_sensor",
-			wantPayload:  &envelope.EventEnvelope_Sensor{},
+			wantPayloads: []interface{}{&envelope.EventEnvelope_Sensor{}},
 		},
 		{
 			name:         "Illuminance payload",
@@ -78,40 +78,52 @@ func TestZ2MTransformer(t *testing.T) {
 			payload:      []byte(`{"illuminance":650}`),
 			wantSource:   "zigbee",
 			wantDeviceID: "light_sensor",
-			wantPayload:  &envelope.EventEnvelope_Sensor{},
+			wantPayloads: []interface{}{&envelope.EventEnvelope_Sensor{}},
+		},
+		{
+			name:         "Combined Motion and Illuminance",
+			topic:        "zigbee/motion_sensor_combo",
+			payload:      []byte(`{"occupancy":true,"illuminance":300}`),
+			wantSource:   "zigbee",
+			wantDeviceID: "motion_sensor_combo",
+			wantPayloads: []interface{}{&envelope.EventEnvelope_BinarySensor{}, &envelope.EventEnvelope_Sensor{}},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			src, devID, env := transformer.Transform(tt.topic, tt.payload)
+			src, devID, envs := transformer.TransformMulti(tt.topic, tt.payload)
 			if src != tt.wantSource {
 				t.Errorf("got source %q, want %q", src, tt.wantSource)
 			}
 			if devID != tt.wantDeviceID {
 				t.Errorf("got deviceID %q, want %q", devID, tt.wantDeviceID)
 			}
-			if tt.wantPayload == nil {
-				if env != nil {
-					t.Errorf("expected nil envelope, got %v", env)
+			if tt.wantPayloads == nil {
+				if len(envs) > 0 {
+					t.Errorf("expected nil envelopes, got %v", envs)
 				}
 			} else {
-				if env == nil {
-					t.Fatalf("expected non-nil envelope")
+				if len(envs) != len(tt.wantPayloads) {
+					t.Fatalf("expected %d envelopes, got %d", len(tt.wantPayloads), len(envs))
 				}
-				// Simple type check for payload
-				switch tt.wantPayload.(type) {
-				case *envelope.EventEnvelope_BinarySensor:
-					if _, ok := env.Payload.(*envelope.EventEnvelope_BinarySensor); !ok {
-						t.Errorf("expected BinarySensor payload, got %T", env.Payload)
+				for i, env := range envs {
+					if env == nil {
+						t.Fatalf("expected non-nil envelope at index %d", i)
 					}
-				case *envelope.EventEnvelope_Light:
-					if _, ok := env.Payload.(*envelope.EventEnvelope_Light); !ok {
-						t.Errorf("expected Light payload, got %T", env.Payload)
-					}
-				case *envelope.EventEnvelope_Sensor:
-					if _, ok := env.Payload.(*envelope.EventEnvelope_Sensor); !ok {
-						t.Errorf("expected Sensor payload, got %T", env.Payload)
+					switch tt.wantPayloads[i].(type) {
+					case *envelope.EventEnvelope_BinarySensor:
+						if _, ok := env.Payload.(*envelope.EventEnvelope_BinarySensor); !ok {
+							t.Errorf("expected BinarySensor payload at index %d, got %T", i, env.Payload)
+						}
+					case *envelope.EventEnvelope_Light:
+						if _, ok := env.Payload.(*envelope.EventEnvelope_Light); !ok {
+							t.Errorf("expected Light payload at index %d, got %T", i, env.Payload)
+						}
+					case *envelope.EventEnvelope_Sensor:
+						if _, ok := env.Payload.(*envelope.EventEnvelope_Sensor); !ok {
+							t.Errorf("expected Sensor payload at index %d, got %T", i, env.Payload)
+						}
 					}
 				}
 			}

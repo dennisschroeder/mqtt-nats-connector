@@ -26,13 +26,8 @@ func NewClient(url string) (*Client, error) {
 }
 
 func (c *Client) Publish(subject string, data []byte) error {
-	// Try JetStream first
-	_, err := c.js.Publish(subject, data)
-	if err != nil {
-		slog.Warn("JetStream publish failed, falling back to core NATS", "subject", subject, "error", err)
-		return c.nc.Publish(subject, data)
-	}
-	return nil
+	// Use core NATS publish to avoid 5s JetStream timeout if no stream exists
+	return c.nc.Publish(subject, data)
 }
 
 func (c *Client) Subscribe(subject string, handler nats.MsgHandler) (*nats.Subscription, error) {

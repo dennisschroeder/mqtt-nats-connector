@@ -112,7 +112,7 @@ func (s *Service) Run(ctx context.Context) error {
 			// Extract plain value for State Store (KV)
 			if domain == "sensor" {
 				if sensorEvent := eventEnvelope.GetSensor(); sensorEvent != nil {
-					key := fmt.Sprintf("%s.%s.%s", source, domain, sensorEvent.Id)
+					key := fmt.Sprintf("%s.%s", domain, sensorEvent.Id)
 					if err := s.nats.PutKV(key, []byte(sensorEvent.Value)); err != nil {
 						slog.Error("Failed to update KV state", "key", key, "error", err)
 					} else {
@@ -121,7 +121,7 @@ func (s *Service) Run(ctx context.Context) error {
 				}
 			} else if domain == "binary_sensor" {
 				if bsEvent := eventEnvelope.GetBinarySensor(); bsEvent != nil {
-					key := fmt.Sprintf("%s.%s.%s", source, domain, bsEvent.EntityId)
+					key := fmt.Sprintf("%s.%s", domain, bsEvent.EntityId)
 					val := "OFF"
 					if bsEvent.State == common.BinaryState_BINARY_STATE_ON {
 						val = "ON"
@@ -134,7 +134,7 @@ func (s *Service) Run(ctx context.Context) error {
 				}
 			} else if domain == "light" {
 				if lightEvent := eventEnvelope.GetLight(); lightEvent != nil {
-					key := fmt.Sprintf("%s.%s.%s", source, domain, lightEvent.EntityId)
+					key := fmt.Sprintf("%s.%s", domain, lightEvent.EntityId)
 					val := "OFF"
 					if lightEvent.State == common.BinaryState_BINARY_STATE_ON {
 						val = "ON"

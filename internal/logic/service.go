@@ -108,6 +108,44 @@ func (s *Service) Run(ctx context.Context) error {
 			if err := s.nats.Publish(natsSubject, data); err != nil {
 				slog.Error("Failed to publish to NATS", "subject", natsSubject, "error", err)
 			}
+			
+			// Extract plain value for State Store (KV)
+			if domain == "sensor" {
+				if sensorEvent := eventEnvelope.GetSensor(); sensorEvent != nil {
+					key := fmt.Sprintf("%s.%s", domain, sensorEvent.Id)
+					if err := s.nats.PutKV(key, []byte(sensorEvent.Value)); err != nil {
+						slog.Error("Failed to update KV state", "key", key, "error", err)
+					} else {
+						slog.Debug("Updated KV state", "key", key, "value", sensorEvent.Value)
+					}
+				}
+			} else if domain == "binary_sensor" {
+				if bsEvent := eventEnvelope.GetBinarySensor(); bsEvent != nil {
+					key := fmt.Sprintf("%s.%s", domain, bsEvent.EntityId)
+					val := "OFF"
+					if bsEvent.State == common.BinaryState_BINARY_STATE_ON {
+						val = "ON"
+					}
+					if err := s.nats.PutKV(key, []byte(val)); err != nil {
+						slog.Error("Failed to update KV state", "key", key, "error", err)
+					} else {
+						slog.Debug("Updated KV state", "key", key, "value", val)
+					}
+				}
+			} else if domain == "light" {
+				if lightEvent := eventEnvelope.GetLight(); lightEvent != nil {
+					key := fmt.Sprintf("%s.%s", domain, lightEvent.EntityId)
+					val := "OFF"
+					if lightEvent.State == common.BinaryState_BINARY_STATE_ON {
+						val = "ON"
+					}
+					if err := s.nats.PutKV(key, []byte(val)); err != nil {
+						slog.Error("Failed to update KV state", "key", key, "error", err)
+					} else {
+						slog.Debug("Updated KV state", "key", key, "value", val)
+					}
+				}
+			}
 		})
 		if err != nil {
 			return err

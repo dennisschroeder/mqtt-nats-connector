@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	iotv1 "github.com/dennisschroeder/iot-schemas-proto/gen/go/iot/v1"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/envelope"
 	"github.com/dennisschroeder/iot-utils-go/pkg/areas"
 	"github.com/dennisschroeder/mqtt-nats-connector/internal/transport/mqtt"
 	"github.com/dennisschroeder/mqtt-nats-connector/internal/transport/nats"
@@ -17,7 +17,7 @@ import (
 
 type Transformer interface {
 	Accepts(topic string) bool
-	Transform(topic string, payload []byte) (source string, deviceID string, envelope *iotv1.EventEnvelope)
+	Transform(topic string, payload []byte) (source string, deviceID string, envelope *envelope.EventEnvelope)
 }
 
 type Service struct {
@@ -82,11 +82,11 @@ func (s *Service) Run(ctx context.Context) error {
 			// Determine Domain
 			domain := "unknown"
 			switch eventEnvelope.Payload.(type) {
-			case *iotv1.EventEnvelope_Presence:
-				domain = "presence"
-			case *iotv1.EventEnvelope_Light:
+			case *envelope.EventEnvelope_BinarySensor:
+				domain = "binary_sensor"
+			case *envelope.EventEnvelope_Light:
 				domain = "light"
-			case *iotv1.EventEnvelope_Sensor:
+			case *envelope.EventEnvelope_Sensor:
 				domain = "sensor"
 			}
 

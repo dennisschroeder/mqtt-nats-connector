@@ -3,7 +3,8 @@ package logic
 import (
 	"testing"
 
-	iotv1 "github.com/dennisschroeder/iot-schemas-proto/gen/go/iot/v1"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/common"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/envelope"
 )
 
 func TestZWaveTransformer(t *testing.T) {
@@ -23,7 +24,7 @@ func TestZWaveTransformer(t *testing.T) {
 		wantSource   string
 		wantDeviceID string
 		wantPayload  interface{}
-		checkState   iotv1.BinaryState
+		checkState   common.BinaryState
 	}{
 		{
 			name:         "Switch On",
@@ -31,8 +32,8 @@ func TestZWaveTransformer(t *testing.T) {
 			payload:      []byte(`{"time":1774310506562}`),
 			wantSource:   "zwave",
 			wantDeviceID: "me_light_1",
-			wantPayload:  &iotv1.EventEnvelope_Light{},
-			checkState:   iotv1.BinaryState_BINARY_STATE_ON,
+			wantPayload:  &envelope.EventEnvelope_Light{},
+			checkState:   common.BinaryState_BINARY_STATE_ON,
 		},
 		{
 			name:         "Switch Off",
@@ -40,8 +41,8 @@ func TestZWaveTransformer(t *testing.T) {
 			payload:      []byte(`{"time":1774310506564}`),
 			wantSource:   "zwave",
 			wantDeviceID: "me_light_1",
-			wantPayload:  &iotv1.EventEnvelope_Light{},
-			checkState:   iotv1.BinaryState_BINARY_STATE_OFF,
+			wantPayload:  &envelope.EventEnvelope_Light{},
+			checkState:   common.BinaryState_BINARY_STATE_OFF,
 		},
 		{
 			name:         "Current Value (Brightness)",
@@ -49,8 +50,8 @@ func TestZWaveTransformer(t *testing.T) {
 			payload:      []byte(`{"value":50.0}`),
 			wantSource:   "zwave",
 			wantDeviceID: "me_light_1",
-			wantPayload:  &iotv1.EventEnvelope_Light{},
-			checkState:   iotv1.BinaryState_BINARY_STATE_ON,
+			wantPayload:  &envelope.EventEnvelope_Light{},
+			checkState:   common.BinaryState_BINARY_STATE_ON,
 		},
 		{
 			name:         "Unknown endpoint (Discovery)",
@@ -80,8 +81,8 @@ func TestZWaveTransformer(t *testing.T) {
 					t.Fatalf("expected non-nil envelope")
 				}
 				switch tt.wantPayload.(type) {
-				case *iotv1.EventEnvelope_Light:
-					l, ok := env.Payload.(*iotv1.EventEnvelope_Light)
+				case *envelope.EventEnvelope_Light:
+					l, ok := env.Payload.(*envelope.EventEnvelope_Light)
 					if !ok {
 						t.Errorf("expected Light payload, got %T", env.Payload)
 					} else {

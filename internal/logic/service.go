@@ -24,6 +24,10 @@ type Transformer interface {
 	Transform(topic string, payload []byte) (source string, deviceID string, envelope *envelope.EventEnvelope)
 }
 
+type MultiTransformer interface {
+	TransformMulti(topic string, payload []byte) (source string, deviceID string, envelopes []*envelope.EventEnvelope)
+}
+
 type Service struct {
 	mqtt         *mqtt.Client
 	nats         *nats.Client
@@ -66,8 +70,20 @@ func (s *Service) Run(ctx context.Context) error {
 				return
 			}
 
-			source, deviceID, eventEnvelope := transformer.Transform(mqttTopic, payload)
-			if eventEnvelope == nil {
+			var source, deviceID string
+			var eventEnvelopes []*envelope.EventEnvelope
+
+			if mt, ok := transformer.(MultiTransformer); ok {
+				source, deviceID, eventEnvelopes = mt.TransformMulti(mqttTopic, payload)
+			} else {
+				var env *envelope.EventEnvelope
+				source, deviceID, env = transformer.Transform(mqttTopic, payload)
+				if env != nil {
+					eventEnvelopes = append(eventEnvelopes, env)
+				}
+			}
+
+			if len(eventEnvelopes) == 0 {
 				return
 			}
 
@@ -77,72 +93,78 @@ func (s *Service) Run(ctx context.Context) error {
 				areaSlug = area.Slug
 			}
 
-			// Wrap metadata
-			eventEnvelope.Id = fmt.Sprintf("evt_%d", time.Now().UnixNano())
-			eventEnvelope.Source = source
-			eventEnvelope.Topic = mqttTopic
-			eventEnvelope.Timestamp = timestamppb.Now()
-
-			// Determine Domain
-			domain := "unknown"
-			switch eventEnvelope.Payload.(type) {
-			case *envelope.EventEnvelope_BinarySensor:
-				domain = "binary_sensor"
-			case *envelope.EventEnvelope_Light:
-				domain = "light"
-			case *envelope.EventEnvelope_Sensor:
-				domain = "sensor"
-			}
-
-			// Construct NATS Subject (ADR 010)
-			natsSubject := fmt.Sprintf("iot.v1.events.%s.%s.%s.%s", source, areaSlug, domain, deviceID)
-			natsSubject = strings.ReplaceAll(natsSubject, "/", ".")
-
-			data, err := proto.Marshal(eventEnvelope)
-			if err != nil {
-				slog.Error("Failed to marshal event", "error", err)
-				return
-			}
-
-			slog.Info("Publishing NATS event", "subject", natsSubject, "area", areaSlug)
-			if err := s.nats.Publish(natsSubject, data); err != nil {
-				slog.Error("Failed to publish to NATS", "subject", natsSubject, "error", err)
-			}
-			
-			// Extract plain value for State Store (KV)
-			if domain == "sensor" {
-				if sensorEvent := eventEnvelope.GetSensor(); sensorEvent != nil {
-					key := fmt.Sprintf("%s.%s", domain, sensorEvent.Id)
-					if err := s.nats.PutKV(key, []byte(sensorEvent.Value)); err != nil {
-						slog.Error("Failed to update KV state", "key", key, "error", err)
-					} else {
-						slog.Debug("Updated KV state", "key", key, "value", sensorEvent.Value)
-					}
+			for _, eventEnvelope := range eventEnvelopes {
+				if eventEnvelope == nil {
+					continue
 				}
-			} else if domain == "binary_sensor" {
-				if bsEvent := eventEnvelope.GetBinarySensor(); bsEvent != nil {
-					key := fmt.Sprintf("%s.%s", domain, bsEvent.EntityId)
-					val := "OFF"
-					if bsEvent.State == common.BinaryState_BINARY_STATE_ON {
-						val = "ON"
-					}
-					if err := s.nats.PutKV(key, []byte(val)); err != nil {
-						slog.Error("Failed to update KV state", "key", key, "error", err)
-					} else {
-						slog.Debug("Updated KV state", "key", key, "value", val)
-					}
+
+				// Wrap metadata
+				eventEnvelope.Id = fmt.Sprintf("evt_%d", time.Now().UnixNano())
+				eventEnvelope.Source = source
+				eventEnvelope.Topic = mqttTopic
+				eventEnvelope.Timestamp = timestamppb.Now()
+
+				// Determine Domain
+				domain := "unknown"
+				switch eventEnvelope.Payload.(type) {
+				case *envelope.EventEnvelope_BinarySensor:
+					domain = "binary_sensor"
+				case *envelope.EventEnvelope_Light:
+					domain = "light"
+				case *envelope.EventEnvelope_Sensor:
+					domain = "sensor"
 				}
-			} else if domain == "light" {
-				if lightEvent := eventEnvelope.GetLight(); lightEvent != nil {
-					key := fmt.Sprintf("%s.%s", domain, lightEvent.EntityId)
-					val := "OFF"
-					if lightEvent.State == common.BinaryState_BINARY_STATE_ON {
-						val = "ON"
+
+				// Construct NATS Subject (ADR 010)
+				natsSubject := fmt.Sprintf("iot.v1.events.%s.%s.%s.%s", source, areaSlug, domain, deviceID)
+				natsSubject = strings.ReplaceAll(natsSubject, "/", ".")
+
+				data, err := proto.Marshal(eventEnvelope)
+				if err != nil {
+					slog.Error("Failed to marshal event", "error", err)
+					continue
+				}
+
+				slog.Info("Publishing NATS event", "subject", natsSubject, "area", areaSlug)
+				if err := s.nats.Publish(natsSubject, data); err != nil {
+					slog.Error("Failed to publish to NATS", "subject", natsSubject, "error", err)
+				}
+
+				// Extract plain value for State Store (KV)
+				if domain == "sensor" {
+					if sensorEvent := eventEnvelope.GetSensor(); sensorEvent != nil {
+						key := fmt.Sprintf("%s.%s", domain, sensorEvent.Id)
+						if err := s.nats.PutKV(key, []byte(sensorEvent.Value)); err != nil {
+							slog.Error("Failed to update KV state", "key", key, "error", err)
+						} else {
+							slog.Debug("Updated KV state", "key", key, "value", sensorEvent.Value)
+						}
 					}
-					if err := s.nats.PutKV(key, []byte(val)); err != nil {
-						slog.Error("Failed to update KV state", "key", key, "error", err)
-					} else {
-						slog.Debug("Updated KV state", "key", key, "value", val)
+				} else if domain == "binary_sensor" {
+					if bsEvent := eventEnvelope.GetBinarySensor(); bsEvent != nil {
+						key := fmt.Sprintf("%s.%s", domain, bsEvent.EntityId)
+						val := "OFF"
+						if bsEvent.State == common.BinaryState_BINARY_STATE_ON {
+							val = "ON"
+						}
+						if err := s.nats.PutKV(key, []byte(val)); err != nil {
+							slog.Error("Failed to update KV state", "key", key, "error", err)
+						} else {
+							slog.Debug("Updated KV state", "key", key, "value", val)
+						}
+					}
+				} else if domain == "light" {
+					if lightEvent := eventEnvelope.GetLight(); lightEvent != nil {
+						key := fmt.Sprintf("%s.%s", domain, lightEvent.EntityId)
+						val := "OFF"
+						if lightEvent.State == common.BinaryState_BINARY_STATE_ON {
+							val = "ON"
+						}
+						if err := s.nats.PutKV(key, []byte(val)); err != nil {
+							slog.Error("Failed to update KV state", "key", key, "error", err)
+						} else {
+							slog.Debug("Updated KV state", "key", key, "value", val)
+						}
 					}
 				}
 			}

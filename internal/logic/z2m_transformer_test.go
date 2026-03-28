@@ -3,7 +3,7 @@ package logic
 import (
 	"testing"
 
-	iotv1 "github.com/dennisschroeder/iot-schemas-proto/gen/go/iot/v1"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/envelope"
 )
 
 func TestZ2MTransformer(t *testing.T) {
@@ -30,7 +30,7 @@ func TestZ2MTransformer(t *testing.T) {
 			payload:      []byte(`{"occupancy":true}`),
 			wantSource:   "zigbee",
 			wantDeviceID: "living_room_motion",
-			wantPayload:  &iotv1.EventEnvelope_Presence{},
+			wantPayload:  &envelope.EventEnvelope_BinarySensor{},
 		},
 		{
 			name:         "Light event",
@@ -38,7 +38,7 @@ func TestZ2MTransformer(t *testing.T) {
 			payload:      []byte(`{"state":"ON","brightness":128}`),
 			wantSource:   "zigbee",
 			wantDeviceID: "living_room_light",
-			wantPayload:  &iotv1.EventEnvelope_Light{},
+			wantPayload:  &envelope.EventEnvelope_Light{},
 		},
 		{
 			name:         "Availability event (ignored)",
@@ -85,12 +85,12 @@ func TestZ2MTransformer(t *testing.T) {
 				}
 				// Simple type check for payload
 				switch tt.wantPayload.(type) {
-				case *iotv1.EventEnvelope_Presence:
-					if _, ok := env.Payload.(*iotv1.EventEnvelope_Presence); !ok {
-						t.Errorf("expected Presence payload, got %T", env.Payload)
+				case *envelope.EventEnvelope_BinarySensor:
+					if _, ok := env.Payload.(*envelope.EventEnvelope_BinarySensor); !ok {
+						t.Errorf("expected BinarySensor payload, got %T", env.Payload)
 					}
-				case *iotv1.EventEnvelope_Light:
-					if _, ok := env.Payload.(*iotv1.EventEnvelope_Light); !ok {
+				case *envelope.EventEnvelope_Light:
+					if _, ok := env.Payload.(*envelope.EventEnvelope_Light); !ok {
 						t.Errorf("expected Light payload, got %T", env.Payload)
 					}
 				}

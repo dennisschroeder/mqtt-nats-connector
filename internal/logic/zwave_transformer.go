@@ -5,7 +5,9 @@ import (
 	"log/slog"
 	"strings"
 
-	iotv1 "github.com/dennisschroeder/iot-schemas-proto/gen/go/iot/v1"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/common"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/envelope"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/light"
 )
 
 type ZWaveTransformer struct{}
@@ -14,7 +16,7 @@ func (t *ZWaveTransformer) Accepts(topic string) bool {
 	return strings.HasPrefix(topic, "zwave/")
 }
 
-func (t *ZWaveTransformer) Transform(topic string, payload []byte) (string, string, *iotv1.EventEnvelope) {
+func (t *ZWaveTransformer) Transform(topic string, payload []byte) (string, string, *envelope.EventEnvelope) {
 	trimmed := strings.TrimPrefix(topic, "zwave/")
 	parts := strings.Split(trimmed, "/")
 	deviceID := parts[0]
@@ -31,20 +33,20 @@ func (t *ZWaveTransformer) Transform(topic string, payload []byte) (string, stri
 	}
 
 	lastPart := parts[len(parts)-1]
-	envelope := &iotv1.EventEnvelope{}
+	event := &envelope.EventEnvelope{}
 
 	if lastPart == "On" {
-		envelope.Payload = &iotv1.EventEnvelope_Light{
-			Light: &iotv1.LightEvent{
+		event.Payload = &envelope.EventEnvelope_Light{
+			Light: &light.LightEvent{
 				EntityId: deviceID,
-				State:    iotv1.BinaryState_BINARY_STATE_ON,
+				State:    common.BinaryState_BINARY_STATE_ON,
 			},
 		}
 	} else if lastPart == "Off" {
-		envelope.Payload = &iotv1.EventEnvelope_Light{
-			Light: &iotv1.LightEvent{
+		event.Payload = &envelope.EventEnvelope_Light{
+			Light: &light.LightEvent{
 				EntityId: deviceID,
-				State:    iotv1.BinaryState_BINARY_STATE_OFF,
+				State:    common.BinaryState_BINARY_STATE_OFF,
 			},
 		}
 	} else if lastPart == "currentValue" {
@@ -52,12 +54,12 @@ func (t *ZWaveTransformer) Transform(topic string, payload []byte) (string, stri
 		if err := json.Unmarshal(payload, &data); err == nil {
 			if val, ok := data["value"]; ok {
 				if num, ok := val.(float64); ok {
-					state := iotv1.BinaryState_BINARY_STATE_OFF
+					state := common.BinaryState_BINARY_STATE_OFF
 					if num > 0 {
-						state = iotv1.BinaryState_BINARY_STATE_ON
+						state = common.BinaryState_BINARY_STATE_ON
 					}
-					envelope.Payload = &iotv1.EventEnvelope_Light{
-						Light: &iotv1.LightEvent{
+					event.Payload = &envelope.EventEnvelope_Light{
+						Light: &light.LightEvent{
 							EntityId:   deviceID,
 							State:      state,
 							Brightness: float32(num) / 99.0, // Z-Wave brightness is typically 0-99
@@ -71,9 +73,9 @@ func (t *ZWaveTransformer) Transform(topic string, payload []byte) (string, stri
 		return "zwave", deviceID, nil
 	}
 
-	if envelope.Payload == nil {
+	if event.Payload == nil {
 		return "zwave", deviceID, nil
 	}
 
-	return "zwave", deviceID, envelope
+	return "zwave", deviceID, event
 }

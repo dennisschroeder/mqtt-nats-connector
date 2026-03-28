@@ -5,7 +5,10 @@ import (
 	"log/slog"
 	"strings"
 
-	iotv1 "github.com/dennisschroeder/iot-schemas-proto/gen/go/iot/v1"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/binary_sensor"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/common"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/envelope"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/light"
 )
 
 type Z2MColor struct {
@@ -28,7 +31,7 @@ func (t *Z2MTransformer) Accepts(topic string) bool {
 	return strings.HasPrefix(topic, "zigbee/")
 }
 
-func (t *Z2MTransformer) Transform(topic string, payload []byte) (string, string, *iotv1.EventEnvelope) {
+func (t *Z2MTransformer) Transform(topic string, payload []byte) (string, string, *envelope.EventEnvelope) {
 	trimmed := strings.TrimPrefix(topic, "zigbee/")
 	parts := strings.Split(trimmed, "/")
 	deviceID := parts[0]
@@ -49,24 +52,30 @@ func (t *Z2MTransformer) Transform(topic string, payload []byte) (string, string
 		return "zigbee", deviceID, nil
 	}
 
-	envelope := &iotv1.EventEnvelope{}
+	event := &envelope.EventEnvelope{}
 
 	// Detection logic: PIR vs Light vs Raw Fallback
 	if strings.Contains(deviceID, "motion") || strings.Contains(deviceID, "presence") || data.Occupancy != nil {
-		state := iotv1.BinaryState_BINARY_STATE_OFF
+		state := common.BinaryState_BINARY_STATE_OFF
 		if data.Occupancy != nil && *data.Occupancy {
-			state = iotv1.BinaryState_BINARY_STATE_ON
+			state = common.BinaryState_BINARY_STATE_ON
 		}
-		envelope.Payload = &iotv1.EventEnvelope_Presence{
-			Presence: &iotv1.PresenceEvent{
-				EntityId: deviceID,
-				State:    state,
+		deviceClass := "motion"
+		if strings.Contains(deviceID, "presence") {
+			deviceClass = "presence"
+		}
+
+		event.Payload = &envelope.EventEnvelope_BinarySensor{
+			BinarySensor: &binary_sensor.BinarySensorEvent{
+				EntityId:    deviceID,
+				State:       state,
+				DeviceClass: deviceClass,
 			},
 		}
 	} else if data.State != nil || data.Brightness != nil {
-		state := iotv1.BinaryState_BINARY_STATE_OFF
+		state := common.BinaryState_BINARY_STATE_OFF
 		if data.State != nil && strings.ToUpper(*data.State) == "ON" {
-			state = iotv1.BinaryState_BINARY_STATE_ON
+			state = common.BinaryState_BINARY_STATE_ON
 		}
 
 		var brightness float32
@@ -74,7 +83,7 @@ func (t *Z2MTransformer) Transform(topic string, payload []byte) (string, string
 			brightness = *data.Brightness / 255.0
 		}
 
-		lightEvt := &iotv1.LightEvent{
+		lightEvt := &light.LightEvent{
 			EntityId:   deviceID,
 			State:      state,
 			Brightness: brightness,
@@ -87,13 +96,13 @@ func (t *Z2MTransformer) Transform(topic string, payload []byte) (string, string
 			lightEvt.ColorMode = data.ColorMode
 		}
 		if data.Color != nil {
-			lightEvt.Color = &iotv1.ColorXY{
+			lightEvt.Color = &common.ColorXY{
 				X: data.Color.X,
 				Y: data.Color.Y,
 			}
 		}
 
-		envelope.Payload = &iotv1.EventEnvelope_Light{
+		event.Payload = &envelope.EventEnvelope_Light{
 			Light: lightEvt,
 		}
 	} else {
@@ -102,5 +111,5 @@ func (t *Z2MTransformer) Transform(topic string, payload []byte) (string, string
 		return "zigbee", deviceID, nil
 	}
 
-	return "zigbee", deviceID, envelope
+	return "zigbee", deviceID, event
 }

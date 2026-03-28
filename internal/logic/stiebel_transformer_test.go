@@ -3,7 +3,8 @@ package logic
 import (
 	"testing"
 
-	iotv1 "github.com/dennisschroeder/iot-schemas-proto/gen/go/iot/v1"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/common"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/envelope"
 )
 
 func TestStiebelTransformer(t *testing.T) {
@@ -23,11 +24,11 @@ func TestStiebelTransformer(t *testing.T) {
 	if env == nil {
 		t.Fatal("expected envelope")
 	}
-	p, ok := env.Payload.(*iotv1.EventEnvelope_Presence)
+	p, ok := env.Payload.(*envelope.EventEnvelope_BinarySensor)
 	if !ok {
-		t.Fatalf("expected Presence payload")
+		t.Fatalf("expected BinarySensor payload")
 	}
-	if p.Presence.State != iotv1.BinaryState_BINARY_STATE_OFF {
-		t.Errorf("expected OFF state for non-ON value, got %v", p.Presence.State)
+	if p.BinarySensor.State != common.BinaryState_BINARY_STATE_OFF {
+		t.Errorf("expected OFF state for non-ON value, got %v", p.BinarySensor.State)
 	}
 }

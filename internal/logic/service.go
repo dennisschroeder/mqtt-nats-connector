@@ -235,20 +235,13 @@ func (s *Service) Run(ctx context.Context) error {
 				
 				// Handle Z-Wave specific topic pattern if using Z-Wave JS UI "ValueID" style
 				if src == "zwave" {
-					// We try both: the standard /set and the specific multilevel/binary targetValue
-					// Most Z-Wave JS UI setups react to <prefix>/<node_name>/<CC>/<endpoint>/<prop>/set
-					endpoints := []int{1, 0, 2}
-					for _, ep := range endpoints {
-						// 1. Try Multilevel
-						mlTopic := fmt.Sprintf("zwave/%s/switch_multilevel/endpoint_%d/targetValue/set", req.TargetEntity, ep)
-						slog.Info("Executing Z-Wave Multilevel Action", "topic", mlTopic, "payload", string(zwavePayload))
-						s.mqtt.Publish(mlTopic, zwavePayload)
-
-						// 2. Try Binary
-						binTopic := fmt.Sprintf("zwave/%s/switch_binary/endpoint_%d/targetValue/set", req.TargetEntity, ep)
-						slog.Info("Executing Z-Wave Binary Action", "topic", binTopic, "payload", string(zwavePayload))
-						s.mqtt.Publish(binTopic, zwavePayload)
-					}
+					// Focus on Multilevel Switch Endpoint 1 as per hardware spec
+					mlTopic := fmt.Sprintf("zwave/%s/switch_multilevel/endpoint_1/targetValue/set", req.TargetEntity)
+					slog.Info("Executing Z-Wave Multilevel Action", "topic", mlTopic, "payload", string(zwavePayload))
+					s.mqtt.Publish(mlTopic, zwavePayload)
+					
+					// Use the simple /set topic as general fallback for Z-Wave
+					finalPayload = zwavePayload
 				}
 
 				slog.Info("Executing Light Action via MQTT", "topic", topic, "source", src)

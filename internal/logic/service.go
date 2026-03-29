@@ -237,21 +237,18 @@ func (s *Service) Run(ctx context.Context) error {
 				if src == "zwave" {
 					// We try both: the standard /set and the specific multilevel/binary targetValue
 					// Most Z-Wave JS UI setups react to <prefix>/<node_name>/<CC>/<endpoint>/<prop>/set
-					
-					// 1. Try Multilevel (Endpoint 1 is standard for many Z-Wave switches)
-					mlTopic := fmt.Sprintf("zwave/%s/switch_multilevel/endpoint_1/targetValue/set", req.TargetEntity)
-					slog.Info("Executing Z-Wave Multilevel Action", "topic", mlTopic, "payload", string(zwavePayload))
-					s.mqtt.Publish(mlTopic, []byte(zwavePayload))
-					
-					// 2. Try Binary (Endpoint 1)
-					binTopic := fmt.Sprintf("zwave/%s/switch_binary/endpoint_1/targetValue/set", req.TargetEntity)
-					slog.Info("Executing Z-Wave Binary Action", "topic", binTopic, "payload", string(zwavePayload))
-					s.mqtt.Publish(binTopic, []byte(zwavePayload))
+					endpoints := []int{1, 0, 2}
+					for _, ep := range endpoints {
+						// 1. Try Multilevel
+						mlTopic := fmt.Sprintf("zwave/%s/switch_multilevel/endpoint_%d/targetValue/set", req.TargetEntity, ep)
+						slog.Info("Executing Z-Wave Multilevel Action", "topic", mlTopic, "payload", string(zwavePayload))
+						s.mqtt.Publish(mlTopic, zwavePayload)
 
-					// 3. Fallback to Endpoint 0
-					mlTopic0 := fmt.Sprintf("zwave/%s/switch_multilevel/endpoint_0/targetValue/set", req.TargetEntity)
-					slog.Info("Executing Z-Wave Fallback Action", "topic", mlTopic0, "payload", string(zwavePayload))
-					s.mqtt.Publish(mlTopic0, []byte(zwavePayload))
+						// 2. Try Binary
+						binTopic := fmt.Sprintf("zwave/%s/switch_binary/endpoint_%d/targetValue/set", req.TargetEntity, ep)
+						slog.Info("Executing Z-Wave Binary Action", "topic", binTopic, "payload", string(zwavePayload))
+						s.mqtt.Publish(binTopic, zwavePayload)
+					}
 				}
 
 				slog.Info("Executing Light Action via MQTT", "topic", topic, "source", src)

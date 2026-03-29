@@ -191,10 +191,18 @@ func (s *Service) Run(ctx context.Context) error {
 		
 		if lightCmd := req.GetLight(); lightCmd != nil {
 			state := "OFF"
+			zwaveVal := 0
 			if lightCmd.State == common.BinaryState_BINARY_STATE_ON {
 				state = "ON"
+				zwaveVal = 255 // Binary default
+				if lightCmd.Brightness > 0 {
+					zwaveVal = int(lightCmd.Brightness * 99.0) // Multilevel default
+				} else {
+					zwaveVal = 99
+				}
 			}
 			
+			// Zigbee Payload
 			payload := map[string]interface{}{
 				"state": state,
 			}
@@ -203,6 +211,9 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 			
 			data, _ := json.Marshal(payload)
+			
+			// Z-Wave Payload (TargetValue wrapper)
+			zwavePayload, _ := json.Marshal(map[string]interface{}{"value": zwaveVal})
 			
 			// Resolve Source (Cache with Broadcast Fallback)
 			sources := []string{"zigbee", "zwave", "ccu2"} // List of known sources
@@ -215,8 +226,27 @@ func (s *Service) Run(ctx context.Context) error {
 
 			for _, src := range sources {
 				topic := fmt.Sprintf("%s/%s/set", src, req.TargetEntity)
-				slog.Info("Executing Light Action via MQTT", "topic", topic, "payload", string(data))
-				if err := s.mqtt.Publish(topic, data); err != nil {
+				finalPayload := data
+				
+				// Handle Z-Wave specific topic pattern if using Z-Wave JS UI "ValueID" style
+				if src == "zwave" {
+					// We try both: the standard /set and the specific multilevel/binary targetValue
+					// Most Z-Wave JS UI setups react to <prefix>/<node_name>/<CC>/<endpoint>/<prop>/set
+					
+					// 1. Try Multilevel
+					mlTopic := fmt.Sprintf("zwave/%s/switch_multilevel/endpoint_0/targetValue/set", req.TargetEntity)
+					s.mqtt.Publish(mlTopic, zwavePayload)
+					
+					// 2. Try Binary
+					binTopic := fmt.Sprintf("zwave/%s/switch_binary/endpoint_0/targetValue/set", req.TargetEntity)
+					s.mqtt.Publish(binTopic, zwavePayload)
+					
+					// Also keep the simple one just in case
+					finalPayload = zwavePayload
+				}
+
+				slog.Info("Executing Light Action via MQTT", "topic", topic, "source", src)
+				if err := s.mqtt.Publish(topic, finalPayload); err != nil {
 					slog.Error("Failed to publish MQTT action", "topic", topic, "error", err)
 				}
 			}

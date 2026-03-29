@@ -189,6 +189,29 @@ func (s *Service) Run(ctx context.Context) error {
 		
 		slog.Info("Received NATS action", "id", req.Id, "target", req.TargetEntity)
 		
+		// 1. Handle Scene Actions (Priority)
+		if sceneCmd := req.GetScene(); sceneCmd != nil {
+			// a. Home Assistant Scene Activation
+			haTopic := "homeassistant/scene/activate"
+			haPayload, _ := json.Marshal(map[string]interface{}{
+				"scene_id": sceneCmd.SceneId,
+			})
+			slog.Info("Activating Home Assistant Scene", "scene", sceneCmd.SceneId)
+			s.mqtt.Publish(haTopic, haPayload)
+
+			// b. Zigbee Group Scene Recall
+			if req.TargetEntity != "" {
+				z2mTopic := fmt.Sprintf("zigbee/%s/set", req.TargetEntity)
+				z2mPayload, _ := json.Marshal(map[string]interface{}{
+					"scene_recall": sceneCmd.SceneId,
+				})
+				slog.Info("Recalling Zigbee Scene", "group", req.TargetEntity, "scene", sceneCmd.SceneId)
+				s.mqtt.Publish(z2mTopic, z2mPayload)
+			}
+			return
+		}
+
+		// 2. Handle Light Actions
 		if lightCmd := req.GetLight(); lightCmd != nil {
 			state := "OFF"
 			zwaveVal := 0
@@ -248,26 +271,6 @@ func (s *Service) Run(ctx context.Context) error {
 				if err := s.mqtt.Publish(topic, finalPayload); err != nil {
 					slog.Error("Failed to publish MQTT action", "topic", topic, "error", err)
 				}
-			}
-		}
-		if sceneCmd := req.GetScene(); sceneCmd != nil {
-			// 1. Home Assistant Scene Activation
-			haTopic := "homeassistant/scene/activate"
-			haPayload, _ := json.Marshal(map[string]interface{}{
-				"scene_id": sceneCmd.SceneId,
-			})
-			slog.Info("Activating Home Assistant Scene", "scene", sceneCmd.SceneId)
-			s.mqtt.Publish(haTopic, haPayload)
-
-			// 2. Zigbee Group Scene Recall
-			// If TargetEntity is provided, we assume it's a Zigbee group name
-			if req.TargetEntity != "" {
-				z2mTopic := fmt.Sprintf("zigbee/%s/set", req.TargetEntity)
-				z2mPayload, _ := json.Marshal(map[string]interface{}{
-					"scene_recall": sceneCmd.SceneId,
-				})
-				slog.Info("Recalling Zigbee Scene", "group", req.TargetEntity, "scene", sceneCmd.SceneId)
-				s.mqtt.Publish(z2mTopic, z2mPayload)
 			}
 		}
 	})

@@ -226,7 +226,12 @@ func (s *Service) Run(ctx context.Context) error {
 
 			for _, src := range sources {
 				topic := fmt.Sprintf("%s/%s/set", src, req.TargetEntity)
-				finalPayload := data
+				var finalPayload []byte
+				if src == "zigbee" || src == "ccu2" {
+					finalPayload = data
+				} else {
+					finalPayload = zwavePayload
+				}
 				
 				// Handle Z-Wave specific topic pattern if using Z-Wave JS UI "ValueID" style
 				if src == "zwave" {
@@ -246,9 +251,6 @@ func (s *Service) Run(ctx context.Context) error {
 					// 3. Fallback to Endpoint 0
 					mlTopic0 := fmt.Sprintf("zwave/%s/switch_multilevel/endpoint_0/targetValue/set", req.TargetEntity)
 					s.mqtt.Publish(mlTopic0, zwavePayload)
-					
-					// Also keep the simple one just in case
-					finalPayload = zwavePayload
 				}
 
 				slog.Info("Executing Light Action via MQTT", "topic", topic, "source", src)

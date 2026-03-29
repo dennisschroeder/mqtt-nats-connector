@@ -33,13 +33,15 @@ type Service struct {
 	nats         *nats.Client
 	topics       []string
 	transformers []Transformer
+	sourceCache  map[string]string // deviceID -> source (e.g. "zigbee", "zwave")
 }
 
 func NewService(m *mqtt.Client, n *nats.Client, topics []string) *Service {
 	return &Service{
-		mqtt:   m,
-		nats:   n,
-		topics: topics,
+		mqtt:        m,
+		nats:        n,
+		topics:      topics,
+		sourceCache: make(map[string]string),
 		transformers: []Transformer{
 			&Z2MTransformer{},
 			&FritzTransformer{},
@@ -86,6 +88,9 @@ func (s *Service) Run(ctx context.Context) error {
 			if len(eventEnvelopes) == 0 {
 				return
 			}
+
+			// Update source cache
+			s.sourceCache[deviceID] = source
 
 			// Resolve Area via iot-utils-go (ADR 009)
 			areaSlug := "global"
@@ -198,12 +203,22 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 			
 			data, _ := json.Marshal(payload)
-			// For simplicity we route all light actions to zigbee
-			topic := fmt.Sprintf("zigbee/%s/set", req.TargetEntity)
 			
-			slog.Info("Executing Light Action via MQTT", "topic", topic, "payload", string(data))
-			if err := s.mqtt.Publish(topic, data); err != nil {
-				slog.Error("Failed to publish MQTT action", "topic", topic, "error", err)
+			// Resolve Source (Cache with Broadcast Fallback)
+			sources := []string{"zigbee", "zwave", "ccu2"} // List of known sources
+			if cachedSource, ok := s.sourceCache[req.TargetEntity]; ok {
+				sources = []string{cachedSource}
+				slog.Debug("Source cache hit", "device", req.TargetEntity, "source", cachedSource)
+			} else {
+				slog.Info("Source cache miss, broadcasting action to all sources", "device", req.TargetEntity)
+			}
+
+			for _, src := range sources {
+				topic := fmt.Sprintf("%s/%s/set", src, req.TargetEntity)
+				slog.Info("Executing Light Action via MQTT", "topic", topic, "payload", string(data))
+				if err := s.mqtt.Publish(topic, data); err != nil {
+					slog.Error("Failed to publish MQTT action", "topic", topic, "error", err)
+				}
 			}
 		}
 	})

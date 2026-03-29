@@ -3,7 +3,7 @@ module github.com/dennisschroeder/mqtt-nats-connector
 go 1.24.0
 
 require (
-	github.com/dennisschroeder/iot-schemas-proto v0.3.0
+	github.com/dennisschroeder/iot-schemas-proto v0.4.1-0.20260329222311-1fb5c4ee8f65
 	github.com/dennisschroeder/iot-utils-go v0.2.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/nats-io/nats.go v1.49.0

@@ -235,13 +235,13 @@ func (s *Service) Run(ctx context.Context) error {
 				
 				// Handle Z-Wave specific topic pattern if using Z-Wave JS UI "ValueID" style
 				if src == "zwave" {
-					// Focus on Multilevel Switch Endpoint 1 as per hardware spec
+					// 1. Try Multilevel (Endpoint 1 is standard for many Z-Wave switches)
 					mlTopic := fmt.Sprintf("zwave/%s/switch_multilevel/endpoint_1/targetValue/set", req.TargetEntity)
 					slog.Info("Executing Z-Wave Multilevel Action", "topic", mlTopic, "payload", string(zwavePayload))
-					s.mqtt.Publish(mlTopic, zwavePayload)
+					s.mqtt.Publish(mlTopic, []byte(zwavePayload))
 					
 					// Use the simple /set topic as general fallback for Z-Wave
-					finalPayload = zwavePayload
+					finalPayload = []byte(zwavePayload)
 				}
 
 				slog.Info("Executing Light Action via MQTT", "topic", topic, "source", src)
@@ -270,6 +270,9 @@ func (s *Service) Run(ctx context.Context) error {
 				s.mqtt.Publish(z2mTopic, z2mPayload)
 			}
 		}
+	})
+	if err != nil {
+		slog.Error("Failed to subscribe to actions on NATS", "error", err)
 		return err
 	}
 

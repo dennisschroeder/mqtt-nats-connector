@@ -241,17 +241,17 @@ func (s *Service) Run(ctx context.Context) error {
 					// 1. Try Multilevel (Endpoint 1 is standard for many Z-Wave switches)
 					mlTopic := fmt.Sprintf("zwave/%s/switch_multilevel/endpoint_1/targetValue/set", req.TargetEntity)
 					slog.Info("Executing Z-Wave Multilevel Action", "topic", mlTopic, "payload", string(zwavePayload))
-					s.mqtt.Publish(mlTopic, zwavePayload)
+					s.mqtt.Publish(mlTopic, []byte(zwavePayload))
 					
 					// 2. Try Binary (Endpoint 1)
 					binTopic := fmt.Sprintf("zwave/%s/switch_binary/endpoint_1/targetValue/set", req.TargetEntity)
 					slog.Info("Executing Z-Wave Binary Action", "topic", binTopic, "payload", string(zwavePayload))
-					s.mqtt.Publish(binTopic, zwavePayload)
+					s.mqtt.Publish(binTopic, []byte(zwavePayload))
 
 					// 3. Fallback to Endpoint 0
 					mlTopic0 := fmt.Sprintf("zwave/%s/switch_multilevel/endpoint_0/targetValue/set", req.TargetEntity)
 					slog.Info("Executing Z-Wave Fallback Action", "topic", mlTopic0, "payload", string(zwavePayload))
-					s.mqtt.Publish(mlTopic0, zwavePayload)
+					s.mqtt.Publish(mlTopic0, []byte(zwavePayload))
 				}
 
 				slog.Info("Executing Light Action via MQTT", "topic", topic, "source", src)

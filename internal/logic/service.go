@@ -181,6 +181,7 @@ func (s *Service) Run(ctx context.Context) error {
 
 	// Action Egress: NATS -> MQTT
 	_, err := s.nats.Subscribe("iot.v1.actions.>", func(msg *natsgo.Msg) {
+		slog.Debug("Received message on NATS action topic", "subject", msg.Subject)
 		var req action.ActionRequest
 		if err := proto.Unmarshal(msg.Data, &req); err != nil {
 			slog.Error("Failed to unmarshal ActionRequest", "error", err)

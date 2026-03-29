@@ -235,10 +235,12 @@ func (s *Service) Run(ctx context.Context) error {
 					
 					// 1. Try Multilevel
 					mlTopic := fmt.Sprintf("zwave/%s/switch_multilevel/endpoint_0/targetValue/set", req.TargetEntity)
+					slog.Info("Executing Z-Wave Multilevel Action", "topic", mlTopic)
 					s.mqtt.Publish(mlTopic, zwavePayload)
 					
 					// 2. Try Binary
 					binTopic := fmt.Sprintf("zwave/%s/switch_binary/endpoint_0/targetValue/set", req.TargetEntity)
+					slog.Info("Executing Z-Wave Binary Action", "topic", binTopic)
 					s.mqtt.Publish(binTopic, zwavePayload)
 					
 					// Also keep the simple one just in case

@@ -98,6 +98,8 @@ func (t *Z2MTransformer) TransformMulti(topic string, payload []byte) (string, s
 			state = common.BinaryState_BINARY_STATE_ON
 		}
 		
+		slog.Info("Doorbell detection", "deviceID", deviceID, "action", data.Action, "state", state)
+
 		envelopes = append(envelopes, &envelope.EventEnvelope{
 			Payload: &envelope.EventEnvelope_BinarySensor{
 				BinarySensor: &binary_sensor.BinarySensorEvent{

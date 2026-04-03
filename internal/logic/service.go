@@ -219,7 +219,7 @@ func (s *Service) Run(ctx context.Context) error {
 			// HA Notify Service Payload
 			haTopic := "homeassistant/notify"
 			if strings.HasPrefix(req.TargetEntity, "notify.") {
-				haTopic = "homeassistant/" + strings.ReplaceAll(req.TargetEntity, ".", "/")
+				haTopic = strings.ReplaceAll(req.TargetEntity, ".", "/")
 			}
 			
 			haPayload, _ := json.Marshal(map[string]interface{}{
@@ -228,6 +228,7 @@ func (s *Service) Run(ctx context.Context) error {
 				"data":    notifCmd.Data,
 			})
 			
+			slog.Info("Publishing to HA MQTT topic", "topic", haTopic)
 			if err := s.mqtt.Publish(haTopic, haPayload); err != nil {
 				slog.Error("Failed to publish notification to MQTT", "topic", haTopic, "error", err)
 			}

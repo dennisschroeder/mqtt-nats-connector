@@ -220,12 +220,8 @@ func (s *Service) Run(ctx context.Context) error {
 			// HA Notify Service Payload
 			haTopic := "homeassistant/notify"
 			if strings.HasPrefix(req.TargetEntity, "notify.") {
-				haTopic = strings.ReplaceAll(req.TargetEntity, ".", "/")
-			}
-			
-			// Ensure it maps to the correct mobile app notify service
-			if req.TargetEntity == "notify.mobile_app_dennis_iphone" {
-				haTopic = "homeassistant/notify/mobile_app_dennis_iphone"
+				// e.g. "notify.mobile_app_dennis" -> "homeassistant/notify/mobile_app_dennis"
+				haTopic = "homeassistant/" + strings.ReplaceAll(req.TargetEntity, ".", "/")
 			}
 			
 			haPayload, _ := json.Marshal(map[string]interface{}{

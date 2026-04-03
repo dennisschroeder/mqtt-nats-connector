@@ -212,7 +212,29 @@ func (s *Service) Run(ctx context.Context) error {
 			return
 		}
 
-		// 2. Handle Light Actions
+		// 3. Handle Notification Actions
+		if notifCmd := req.GetNotification(); notifCmd != nil {
+			slog.Info("Forwarding notification to Home Assistant", "target", req.TargetEntity, "title", notifCmd.Title)
+			
+			// HA Notify Service Payload
+			haTopic := "homeassistant/notify"
+			if strings.HasPrefix(req.TargetEntity, "notify.") {
+				haTopic = "homeassistant/" + strings.ReplaceAll(req.TargetEntity, ".", "/")
+			}
+			
+			haPayload, _ := json.Marshal(map[string]interface{}{
+				"title":   notifCmd.Title,
+				"message": notifCmd.Message,
+				"data":    notifCmd.Data,
+			})
+			
+			if err := s.mqtt.Publish(haTopic, haPayload); err != nil {
+				slog.Error("Failed to publish notification to MQTT", "topic", haTopic, "error", err)
+			}
+			return
+		}
+
+		// 4. Handle Light Actions
 		if lightCmd := req.GetLight(); lightCmd != nil {
 			state := "OFF"
 			zwaveVal := 0

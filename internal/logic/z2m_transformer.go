@@ -20,6 +20,7 @@ type Z2MColor struct {
 
 type Z2MPayload struct {
 	Occupancy   *bool     `json:"occupancy"`
+	Action      *string   `json:"action"`
 	State       *string   `json:"state"`
 	Brightness  *float32  `json:"brightness"`
 	ColorTemp   *int32    `json:"color_temp"`
@@ -85,6 +86,24 @@ func (t *Z2MTransformer) TransformMulti(topic string, payload []byte) (string, s
 					EntityId:    deviceID,
 					State:       state,
 					DeviceClass: deviceClass,
+				},
+			},
+		})
+	}
+	
+	// Detection logic: Doorbell/Action
+	if data.Action != nil || strings.Contains(deviceID, "doorbell") {
+		state := common.BinaryState_BINARY_STATE_OFF
+		if data.Action != nil && *data.Action == "pressed" {
+			state = common.BinaryState_BINARY_STATE_ON
+		}
+		
+		envelopes = append(envelopes, &envelope.EventEnvelope{
+			Payload: &envelope.EventEnvelope_BinarySensor{
+				BinarySensor: &binary_sensor.BinarySensorEvent{
+					EntityId:    deviceID,
+					State:       state,
+					DeviceClass: "doorbell",
 				},
 			},
 		})

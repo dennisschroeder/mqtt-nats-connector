@@ -230,7 +230,7 @@ func (s *Service) Run(ctx context.Context) error {
 				z2mTopic := fmt.Sprintf("zigbee/%s/set", req.TargetEntity)
 				
 				// Try to parse sceneId as int or lookup from cache
-				var sceneIDInt int
+				sceneIDInt := -1
 				if id, err := strconv.Atoi(sceneCmd.SceneId); err == nil {
 					sceneIDInt = id
 				} else if mapping, ok := s.z2mScenes[req.TargetEntity]; ok {
@@ -240,7 +240,7 @@ func (s *Service) Run(ctx context.Context) error {
 				}
 
 				var z2mPayload []byte
-				if sceneIDInt != 0 {
+				if sceneIDInt != -1 {
 					z2mPayload, _ = json.Marshal(map[string]interface{}{
 						"scene_recall": sceneIDInt,
 					})

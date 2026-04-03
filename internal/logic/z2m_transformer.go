@@ -55,7 +55,7 @@ func (t *Z2MTransformer) TransformMulti(topic string, payload []byte) (string, s
 		eventType = strings.Join(parts[1:], "/")
 	}
 
-	slog.Debug("Processing Z2M message", "topic", topic, "deviceID", deviceID, "eventType", eventType)
+	slog.Info("Processing Z2M message", "topic", topic, "deviceID", deviceID, "eventType", eventType)
 
 	// SPECIAL CASE: Doorbell uses /action topic
 	if strings.Contains(deviceID, "doorbell") {

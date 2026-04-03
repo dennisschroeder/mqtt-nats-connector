@@ -37,6 +37,7 @@ func (c *Client) Subscribe(topic string, handler MessageHandler) error {
 }
 
 func (c *Client) Publish(topic string, payload []byte) error {
+	slog.Info("MQTT Publish", "topic", topic, "payload", string(payload))
 	token := c.client.Publish(topic, 1, false, payload)
 	token.Wait()
 	return token.Error()

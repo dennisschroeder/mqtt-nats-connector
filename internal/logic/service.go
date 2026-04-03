@@ -49,6 +49,7 @@ func NewService(m *mqtt.Client, n *nats.Client, topics []string) *Service {
 			&HomematicTransformer{},
 			&StiebelTransformer{},
 			&ZWaveTransformer{},
+			&ESPHomeTransformer{},
 		},
 	}
 }

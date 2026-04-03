@@ -228,7 +228,7 @@ func (s *Service) Run(ctx context.Context) error {
 				"data":    notifCmd.Data,
 			})
 			
-			slog.Info("Publishing to HA MQTT topic", "topic", haTopic)
+			slog.Info("Publishing to HA MQTT topic", "topic", haTopic, "payload", string(haPayload))
 			if err := s.mqtt.Publish(haTopic, haPayload); err != nil {
 				slog.Error("Failed to publish notification to MQTT", "topic", haTopic, "error", err)
 			}

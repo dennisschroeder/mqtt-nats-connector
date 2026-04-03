@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +35,7 @@ type Service struct {
 	topics       []string
 	transformers []Transformer
 	sourceCache  map[string]string // deviceID -> source (e.g. "zigbee", "zwave")
+	z2mScenes    map[string]map[string]int // TargetEntity -> SceneName -> SceneID
 }
 
 func NewService(m *mqtt.Client, n *nats.Client, topics []string) *Service {
@@ -42,6 +44,7 @@ func NewService(m *mqtt.Client, n *nats.Client, topics []string) *Service {
 		nats:        n,
 		topics:      topics,
 		sourceCache: make(map[string]string),
+		z2mScenes:   make(map[string]map[string]int),
 		transformers: []Transformer{
 			&Z2MTransformer{},
 			&FritzTransformer{},
@@ -59,6 +62,27 @@ func (s *Service) Run(ctx context.Context) error {
 		slog.Info("Mirroring topic", "topic", topic)
 		err := s.mqtt.Subscribe(topic, func(mqttTopic string, payload []byte) {
 			slog.Debug("Received MQTT message", "topic", mqttTopic, "payload", string(payload))
+
+			if mqttTopic == "zigbee/bridge/groups" {
+				var groups []struct {
+					FriendlyName string `json:"friendly_name"`
+					Scenes       []struct {
+						ID   int    `json:"id"`
+						Name string `json:"name"`
+					} `json:"scenes"`
+				}
+				if err := json.Unmarshal(payload, &groups); err == nil {
+					for _, g := range groups {
+						if _, ok := s.z2mScenes[g.FriendlyName]; !ok {
+							s.z2mScenes[g.FriendlyName] = make(map[string]int)
+						}
+						for _, sc := range g.Scenes {
+							s.z2mScenes[g.FriendlyName][sc.Name] = sc.ID
+						}
+					}
+					slog.Info("Updated Z2M scene mappings", "groups_count", len(groups))
+				}
+			}
 
 			var transformer Transformer
 			for _, t := range s.transformers {
@@ -204,10 +228,30 @@ func (s *Service) Run(ctx context.Context) error {
 			// b. Zigbee Group Scene Recall
 			if req.TargetEntity != "" {
 				z2mTopic := fmt.Sprintf("zigbee/%s/set", req.TargetEntity)
-				z2mPayload, _ := json.Marshal(map[string]interface{}{
-					"scene_recall": sceneCmd.SceneId,
-				})
-				slog.Info("Recalling Zigbee Scene", "group", req.TargetEntity, "scene", sceneCmd.SceneId)
+				
+				// Try to parse sceneId as int or lookup from cache
+				var sceneIDInt int
+				if id, err := strconv.Atoi(sceneCmd.SceneId); err == nil {
+					sceneIDInt = id
+				} else if mapping, ok := s.z2mScenes[req.TargetEntity]; ok {
+					if id, ok := mapping[sceneCmd.SceneId]; ok {
+						sceneIDInt = id
+					}
+				}
+
+				var z2mPayload []byte
+				if sceneIDInt != 0 {
+					z2mPayload, _ = json.Marshal(map[string]interface{}{
+						"scene_recall": sceneIDInt,
+					})
+					slog.Info("Recalling Zigbee Scene by ID", "group", req.TargetEntity, "sceneName", sceneCmd.SceneId, "sceneId", sceneIDInt)
+				} else {
+					z2mPayload, _ = json.Marshal(map[string]interface{}{
+						"scene_recall": sceneCmd.SceneId,
+					})
+					slog.Info("Recalling Zigbee Scene by String (Fallback)", "group", req.TargetEntity, "scene", sceneCmd.SceneId)
+				}
+				
 				s.mqtt.Publish(z2mTopic, z2mPayload)
 			}
 			return

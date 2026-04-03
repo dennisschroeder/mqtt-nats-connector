@@ -56,7 +56,7 @@ func (t *Z2MTransformer) TransformMulti(topic string, payload []byte) (string, s
 	}
 
 	// SPECIAL CASE: Doorbell uses /action topic
-	if (deviceID == "me_doorbell" || deviceID == "binary_sensor.me_doorbell") && (eventType == "action" || eventType == "state") {
+	if strings.Contains(deviceID, "doorbell") && (eventType == "action" || eventType == "state") {
 		eventType = "state"
 	}
 

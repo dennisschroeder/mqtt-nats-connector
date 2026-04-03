@@ -55,6 +55,11 @@ func (t *Z2MTransformer) TransformMulti(topic string, payload []byte) (string, s
 		eventType = strings.Join(parts[1:], "/")
 	}
 
+	// SPECIAL CASE: Doorbell uses /action topic
+	if deviceID == "me_doorbell" && eventType == "action" {
+		eventType = "state"
+	}
+
 	// Ignore non-state events for Zigbee (like availability or bridge/#)
 	if eventType != "state" || deviceID == "bridge" {
 		slog.Debug("Ignoring non-state or bridge event", "topic", topic, "event_type", eventType)
@@ -63,8 +68,11 @@ func (t *Z2MTransformer) TransformMulti(topic string, payload []byte) (string, s
 
 	var data Z2MPayload
 	if err := json.Unmarshal(payload, &data); err != nil {
-		slog.Debug("Could not parse Z2M JSON", "topic", topic, "error", err)
-		return "zigbee", deviceID, nil
+		// Try parsing as raw string if JSON fails (for /action topics)
+		val := string(payload)
+		data = Z2MPayload{
+			Action: &val,
+		}
 	}
 
 	var envelopes []*envelope.EventEnvelope

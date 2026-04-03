@@ -222,6 +222,11 @@ func (s *Service) Run(ctx context.Context) error {
 				haTopic = strings.ReplaceAll(req.TargetEntity, ".", "/")
 			}
 			
+			// Ensure it maps to the correct mobile app notify service
+			if req.TargetEntity == "notify.mobile_app_dennis_iphone" {
+				haTopic = "homeassistant/notify/mobile_app_dennis_iphone"
+			}
+			
 			haPayload, _ := json.Marshal(map[string]interface{}{
 				"title":   notifCmd.Title,
 				"message": notifCmd.Message,

@@ -212,28 +212,28 @@ func (s *Service) Run(ctx context.Context) error {
 			return
 		}
 
-	// Handle Notification Actions
-	if notifCmd := req.GetNotification(); notifCmd != nil {
-		slog.Info("Action: Received notification request", "target", req.TargetEntity, "title", notifCmd.Title)
-		
-		// HA Notify Service Payload
-		haTopic := "homeassistant/notify"
-		if strings.HasPrefix(req.TargetEntity, "notify.") {
-			haTopic = strings.ReplaceAll(req.TargetEntity, ".", "/")
+		// Handle Notification Actions
+		if notifCmd := req.GetNotification(); notifCmd != nil {
+			slog.Info("Action: Received notification request", "target", req.TargetEntity, "title", notifCmd.Title)
+			
+			// HA Notify Service Payload
+			haTopic := "homeassistant/notify"
+			if strings.HasPrefix(req.TargetEntity, "notify.") {
+				haTopic = strings.ReplaceAll(req.TargetEntity, ".", "/")
+			}
+			
+			haPayload, _ := json.Marshal(map[string]interface{}{
+				"title":   notifCmd.Title,
+				"message": notifCmd.Message,
+				"data":    notifCmd.Data,
+			})
+			
+			slog.Info("Action: Publishing to HA MQTT topic", "topic", haTopic, "payload", string(haPayload))
+			if err := s.mqtt.Publish(haTopic, haPayload); err != nil {
+				slog.Error("Action: Failed to publish notification to MQTT", "topic", haTopic, "error", err)
+			}
+			return
 		}
-		
-		haPayload, _ := json.Marshal(map[string]interface{}{
-			"title":   notifCmd.Title,
-			"message": notifCmd.Message,
-			"data":    notifCmd.Data,
-		})
-		
-		slog.Info("Action: Publishing to HA MQTT topic", "topic", haTopic, "payload", string(haPayload))
-		if err := s.mqtt.Publish(haTopic, haPayload); err != nil {
-			slog.Error("Action: Failed to publish notification to MQTT", "topic", haTopic, "error", err)
-		}
-		return
-	}
 
 		// 4. Handle Light Actions
 		if lightCmd := req.GetLight(); lightCmd != nil {

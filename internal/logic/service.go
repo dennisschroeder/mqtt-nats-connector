@@ -372,8 +372,20 @@ func (s *Service) Run(ctx context.Context) error {
 
 			for _, src := range sources {
 				topic := fmt.Sprintf("%s/%s/set", src, req.TargetEntity)
-				slog.Info("Executing Cover Action via MQTT", "topic", topic, "source", src, "payload", string(data))
-				if err := s.mqtt.Publish(topic, data); err != nil {
+				
+				var finalPayload []byte
+				if src == "ccu2" {
+					if coverCmd.Position != nil {
+						finalPayload = []byte(fmt.Sprintf("%d", *coverCmd.Position))
+					} else {
+						finalPayload = []byte(state)
+					}
+				} else {
+					finalPayload = data
+				}
+
+				slog.Info("Executing Cover Action via MQTT", "topic", topic, "source", src, "payload", string(finalPayload))
+				if err := s.mqtt.Publish(topic, finalPayload); err != nil {
 					slog.Error("Failed to publish MQTT action for cover", "topic", topic, "error", err)
 				}
 			}

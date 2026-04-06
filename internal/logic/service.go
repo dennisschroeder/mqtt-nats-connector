@@ -371,7 +371,12 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 
 			for _, src := range sources {
-				topic := fmt.Sprintf("%s/%s/set", src, req.TargetEntity)
+				var topic string
+				if src == "ccu2" {
+					topic = fmt.Sprintf("%s/cover/%s/set", src, req.TargetEntity)
+				} else {
+					topic = fmt.Sprintf("%s/%s/set", src, req.TargetEntity)
+				}
 				
 				var finalPayload []byte
 				if src == "ccu2" {

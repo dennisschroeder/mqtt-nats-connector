@@ -343,6 +343,41 @@ func (s *Service) Run(ctx context.Context) error {
 				}
 			}
 		}
+
+		// 5. Handle Cover Actions
+		if coverCmd := req.GetCover(); coverCmd != nil {
+			slog.Info("Action: Received cover request", "target", req.TargetEntity, "state", coverCmd.State)
+			
+			state := "STOP"
+			if coverCmd.State == "OPEN" {
+				state = "OPEN"
+			} else if coverCmd.State == "CLOSE" {
+				state = "CLOSE"
+			}
+			
+			payload := map[string]interface{}{
+				"state": state,
+			}
+			if coverCmd.Position != nil {
+				payload["position"] = *coverCmd.Position
+			}
+			
+			data, _ := json.Marshal(payload)
+			
+			// Resolve Source
+			sources := []string{"zigbee", "zwave", "ccu2"}
+			if cachedSource, ok := s.sourceCache[req.TargetEntity]; ok {
+				sources = []string{cachedSource}
+			}
+
+			for _, src := range sources {
+				topic := fmt.Sprintf("%s/%s/set", src, req.TargetEntity)
+				slog.Info("Executing Cover Action via MQTT", "topic", topic, "source", src, "payload", string(data))
+				if err := s.mqtt.Publish(topic, data); err != nil {
+					slog.Error("Failed to publish MQTT action for cover", "topic", topic, "error", err)
+				}
+			}
+		}
 	})
 	if err != nil {
 		slog.Error("Failed to subscribe to actions on NATS", "error", err)

@@ -81,10 +81,10 @@ func (t *Z2MTransformer) TransformMulti(topic string, payload []byte) (string, s
 
 	var envelopes []*envelope.EventEnvelope
 
-	// Detection logic: PIR
-	if strings.Contains(deviceID, "motion") || strings.Contains(deviceID, "presence") || data.Occupancy != nil || data.Presence != nil || data.PirDetection != nil {
+	// Detection logic: PIR / Main Presence
+	if strings.Contains(deviceID, "motion") || strings.Contains(deviceID, "presence") || data.Occupancy != nil || data.Presence != nil {
 		state := common.BinaryState_BINARY_STATE_OFF
-		if (data.Occupancy != nil && *data.Occupancy) || (data.Presence != nil && *data.Presence) || (data.PirDetection != nil && *data.PirDetection) {
+		if (data.Occupancy != nil && *data.Occupancy) || (data.Presence != nil && *data.Presence) {
 			state = common.BinaryState_BINARY_STATE_ON
 		}
 		deviceClass := "motion"
@@ -98,6 +98,24 @@ func (t *Z2MTransformer) TransformMulti(topic string, payload []byte) (string, s
 					EntityId:    deviceID,
 					State:       state,
 					DeviceClass: deviceClass,
+				},
+			},
+		})
+	}
+
+	// Detection logic: Raw PIR
+	if data.PirDetection != nil {
+		state := common.BinaryState_BINARY_STATE_OFF
+		if *data.PirDetection {
+			state = common.BinaryState_BINARY_STATE_ON
+		}
+
+		envelopes = append(envelopes, &envelope.EventEnvelope{
+			Payload: &envelope.EventEnvelope_BinarySensor{
+				BinarySensor: &binary_sensor.BinarySensorEvent{
+					EntityId:    deviceID + "_pir",
+					State:       state,
+					DeviceClass: "motion",
 				},
 			},
 		})

@@ -19,8 +19,10 @@ type Z2MColor struct {
 }
 
 type Z2MPayload struct {
-	Occupancy   *bool     `json:"occupancy"`
-	Action      *string   `json:"action"`
+	Occupancy    *bool     `json:"occupancy"`
+	Presence     *bool     `json:"presence"`
+	PirDetection *bool     `json:"pir_detection"`
+	Action       *string   `json:"action"`
 	State       *string   `json:"state"`
 	Brightness  *float32  `json:"brightness"`
 	ColorTemp   *int32    `json:"color_temp"`
@@ -80,9 +82,9 @@ func (t *Z2MTransformer) TransformMulti(topic string, payload []byte) (string, s
 	var envelopes []*envelope.EventEnvelope
 
 	// Detection logic: PIR
-	if strings.Contains(deviceID, "motion") || strings.Contains(deviceID, "presence") || data.Occupancy != nil {
+	if strings.Contains(deviceID, "motion") || strings.Contains(deviceID, "presence") || data.Occupancy != nil || data.Presence != nil || data.PirDetection != nil {
 		state := common.BinaryState_BINARY_STATE_OFF
-		if data.Occupancy != nil && *data.Occupancy {
+		if (data.Occupancy != nil && *data.Occupancy) || (data.Presence != nil && *data.Presence) || (data.PirDetection != nil && *data.PirDetection) {
 			state = common.BinaryState_BINARY_STATE_ON
 		}
 		deviceClass := "motion"

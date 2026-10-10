@@ -176,3 +176,20 @@ func TestZ2MTransformerIgnoresDoorbellSubtopics(t *testing.T) {
 		}
 	}
 }
+
+func TestZ2MTransformerDoorbellStatusWithoutActionYieldsOff(t *testing.T) {
+	transformer := &Z2MTransformer{}
+
+	_, _, envs := transformer.TransformMulti("zigbee/me_doorbell", []byte(`{"battery":59,"battery_low":false,"last_seen":"2026-10-10T15:30:00+02:00","linkquality":255,"tamper":false}`))
+
+	if len(envs) != 1 {
+		t.Fatalf("expected exactly 1 event, got %d", len(envs))
+	}
+	bs, ok := envs[0].Payload.(*envelope.EventEnvelope_BinarySensor)
+	if !ok {
+		t.Fatalf("expected BinarySensor payload, got %T", envs[0].Payload)
+	}
+	if bs.BinarySensor.EntityId != "me_doorbell" || bs.BinarySensor.DeviceClass != "doorbell" || bs.BinarySensor.State != common.BinaryState_BINARY_STATE_OFF {
+		t.Errorf("unexpected doorbell event: %+v", bs.BinarySensor)
+	}
+}

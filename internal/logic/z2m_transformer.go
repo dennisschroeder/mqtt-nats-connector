@@ -69,7 +69,7 @@ func (t *Z2MTransformer) TransformMulti(topic string, payload []byte) (string, s
 
 	var data Z2MPayload
 	if err := json.Unmarshal(payload, &data); err != nil {
-		// Try parsing as raw string if JSON fails (for /action topics)
+		// Treat non-JSON payloads as a raw action string
 		val := string(payload)
 		data = Z2MPayload{
 			Action: &val,

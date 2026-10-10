@@ -1,8 +1,10 @@
 package logic
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/common"
 	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/envelope"
 )
 
@@ -128,5 +130,49 @@ func TestZ2MTransformer(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestZ2MTransformerDoorbellSinglePressYieldsOneEvent(t *testing.T) {
+	transformer := &Z2MTransformer{}
+
+	// z2m publishes both topics for one press of me_doorbell.
+	messages := []struct {
+		topic   string
+		payload []byte
+	}{
+		{"zigbee/me_doorbell", []byte(`{"action":"pressed","battery":59,"battery_low":false,"linkquality":255,"tamper":false}`)},
+		{"zigbee/me_doorbell/action", []byte(`pressed`)},
+	}
+
+	var envs []*envelope.EventEnvelope
+	for _, m := range messages {
+		_, _, e := transformer.TransformMulti(m.topic, m.payload)
+		envs = append(envs, e...)
+	}
+
+	if len(envs) != 1 {
+		t.Fatalf("expected exactly 1 event for one press, got %d", len(envs))
+	}
+	bs, ok := envs[0].Payload.(*envelope.EventEnvelope_BinarySensor)
+	if !ok {
+		t.Fatalf("expected BinarySensor payload, got %T", envs[0].Payload)
+	}
+	if bs.BinarySensor.EntityId != "me_doorbell" || bs.BinarySensor.DeviceClass != "doorbell" || bs.BinarySensor.State != common.BinaryState_BINARY_STATE_ON {
+		t.Errorf("unexpected doorbell event: %+v", bs.BinarySensor)
+	}
+}
+
+func TestZ2MTransformerIgnoresDoorbellSubtopics(t *testing.T) {
+	transformer := &Z2MTransformer{}
+
+	for _, topic := range []string{"zigbee/me_doorbell/action", "zigbee/me_doorbell/availability"} {
+		payload := []byte(`pressed`)
+		if strings.HasSuffix(topic, "availability") {
+			payload = []byte(`{"state":"online"}`)
+		}
+		if _, _, envs := transformer.TransformMulti(topic, payload); len(envs) != 0 {
+			t.Errorf("%s: expected no events, got %d", topic, len(envs))
+		}
 	}
 }

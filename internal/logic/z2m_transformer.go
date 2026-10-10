@@ -59,12 +59,9 @@ func (t *Z2MTransformer) TransformMulti(topic string, payload []byte) (string, s
 
 	slog.Info("Processing Z2M message", "topic", topic, "deviceID", deviceID, "eventType", eventType)
 
-	// SPECIAL CASE: Doorbell uses /action topic
-	if strings.Contains(deviceID, "doorbell") {
-		eventType = "state"
-	}
-
-	// Ignore non-state events for Zigbee (like availability or bridge/#)
+	// Ignore non-state events for Zigbee (like availability or bridge/#).
+	// The <device>/action topic is z2m's HA device-trigger mirror of the "action"
+	// field already present in the main payload; processing both duplicates events.
 	if eventType != "state" || deviceID == "bridge" {
 		slog.Debug("Ignoring non-state or bridge event", "topic", topic, "event_type", eventType)
 		return "zigbee", deviceID, nil
@@ -72,7 +69,7 @@ func (t *Z2MTransformer) TransformMulti(topic string, payload []byte) (string, s
 
 	var data Z2MPayload
 	if err := json.Unmarshal(payload, &data); err != nil {
-		// Try parsing as raw string if JSON fails (for /action topics)
+		// Treat non-JSON payloads as a raw action string
 		val := string(payload)
 		data = Z2MPayload{
 			Action: &val,

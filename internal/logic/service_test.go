@@ -2,6 +2,7 @@ package logic
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 
@@ -18,7 +19,7 @@ import (
 type fakeMQTT struct {
 	mu        sync.Mutex
 	handlers  map[string]mqtt.MessageHandler
-	published []string
+	published []string // "topic payload"
 }
 
 func (f *fakeMQTT) Subscribe(topic string, handler mqtt.MessageHandler) error {
@@ -28,10 +29,10 @@ func (f *fakeMQTT) Subscribe(topic string, handler mqtt.MessageHandler) error {
 	return nil
 }
 
-func (f *fakeMQTT) Publish(topic string, _ []byte) error {
+func (f *fakeMQTT) Publish(topic string, payload []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.published = append(f.published, topic)
+	f.published = append(f.published, topic+" "+string(payload))
 	return nil
 }
 
@@ -61,7 +62,7 @@ func mustMarshal(t *testing.T, m proto.Message) []byte {
 // Paho delivers MQTT messages and nats.go delivers action messages on different
 // goroutines, so the caches shared between both paths must be synchronized.
 // Run with -race: before the fix this tripped "concurrent map read and map
-// write" in production (16.10.2026).
+// write" in production (2026-10-15 23:40Z).
 func TestServiceConcurrentEventsAndActions(t *testing.T) {
 	m := &fakeMQTT{handlers: map[string]mqtt.MessageHandler{}}
 	n := &fakeNATS{subscribed: make(chan struct{})}
@@ -110,10 +111,17 @@ func TestServiceConcurrentEventsAndActions(t *testing.T) {
 	}()
 	wg.Wait()
 
-	// With the cache warm, the cover command must go to the CCU only.
+	// With the caches warm, the cover command goes to the CCU only and the
+	// scene name resolves to the Z2M scene ID.
 	m.published = m.published[:0]
 	n.actionHandler(&natsgo.Msg{Subject: "iot.v1.actions.test", Data: actions[0]})
-	if len(m.published) != 1 || m.published[0] != "ccu2/cover/ba_gf_shutter_1/set" {
-		t.Errorf("cover action published to %v, want [ccu2/cover/ba_gf_shutter_1/set]", m.published)
+	if want := []string{"ccu2/cover/ba_gf_shutter_1/set 0"}; !slices.Equal(m.published, want) {
+		t.Errorf("cover action published %v, want %v", m.published, want)
+	}
+
+	m.published = m.published[:0]
+	n.actionHandler(&natsgo.Msg{Subject: "iot.v1.actions.test", Data: actions[2]})
+	if want := `zigbee/lr_lights/set {"scene_recall":3}`; !slices.Contains(m.published, want) {
+		t.Errorf("scene action published %v, want it to contain %q", m.published, want)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/action"
@@ -14,7 +15,6 @@ import (
 	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/envelope"
 	"github.com/dennisschroeder/iot-utils-go/pkg/areas"
 	"github.com/dennisschroeder/mqtt-nats-connector/internal/transport/mqtt"
-	"github.com/dennisschroeder/mqtt-nats-connector/internal/transport/nats"
 	natsgo "github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -29,16 +29,33 @@ type MultiTransformer interface {
 	TransformMulti(topic string, payload []byte) (source string, deviceID string, envelopes []*envelope.EventEnvelope)
 }
 
-type Service struct {
-	mqtt         *mqtt.Client
-	nats         *nats.Client
-	topics       []string
-	transformers []Transformer
-	sourceCache  map[string]string // deviceID -> source (e.g. "zigbee", "zwave")
-	z2mScenes    map[string]map[string]int // TargetEntity -> SceneName -> SceneID
+// mqttClient and natsClient are the subsets of the transport clients the
+// service uses, so tests can drive the handlers without a broker.
+type mqttClient interface {
+	Subscribe(topic string, handler mqtt.MessageHandler) error
+	Publish(topic string, payload []byte) error
 }
 
-func NewService(m *mqtt.Client, n *nats.Client, topics []string) *Service {
+type natsClient interface {
+	Publish(subject string, data []byte) error
+	PutKV(key string, data []byte) error
+	Subscribe(subject string, handler natsgo.MsgHandler) (*natsgo.Subscription, error)
+}
+
+type Service struct {
+	mqtt         mqttClient
+	nats         natsClient
+	topics       []string
+	transformers []Transformer
+
+	// Written from MQTT callbacks, read from NATS action callbacks, which run
+	// on different goroutines.
+	mu          sync.RWMutex
+	sourceCache map[string]string         // deviceID -> source (e.g. "zigbee", "zwave")
+	z2mScenes   map[string]map[string]int // TargetEntity -> SceneName -> SceneID
+}
+
+func NewService(m mqttClient, n natsClient, topics []string) *Service {
 	return &Service{
 		mqtt:        m,
 		nats:        n,
@@ -72,6 +89,7 @@ func (s *Service) Run(ctx context.Context) error {
 					} `json:"scenes"`
 				}
 				if err := json.Unmarshal(payload, &groups); err == nil {
+					s.mu.Lock()
 					for _, g := range groups {
 						if _, ok := s.z2mScenes[g.FriendlyName]; !ok {
 							s.z2mScenes[g.FriendlyName] = make(map[string]int)
@@ -80,6 +98,7 @@ func (s *Service) Run(ctx context.Context) error {
 							s.z2mScenes[g.FriendlyName][sc.Name] = sc.ID
 						}
 					}
+					s.mu.Unlock()
 					slog.Info("Updated Z2M scene mappings", "groups_count", len(groups))
 				}
 			}
@@ -115,7 +134,9 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 
 			// Update source cache
+			s.mu.Lock()
 			s.sourceCache[deviceID] = source
+			s.mu.Unlock()
 
 			// Resolve Area via iot-utils-go (ADR 009)
 			areaSlug := "global"
@@ -233,10 +254,8 @@ func (s *Service) Run(ctx context.Context) error {
 				sceneIDInt := -1
 				if id, err := strconv.Atoi(sceneCmd.SceneId); err == nil {
 					sceneIDInt = id
-				} else if mapping, ok := s.z2mScenes[req.TargetEntity]; ok {
-					if id, ok := mapping[sceneCmd.SceneId]; ok {
-						sceneIDInt = id
-					}
+				} else if id, ok := s.z2mSceneID(req.TargetEntity, sceneCmd.SceneId); ok {
+					sceneIDInt = id
 				}
 
 				var z2mPayload []byte
@@ -310,7 +329,7 @@ func (s *Service) Run(ctx context.Context) error {
 			
 			// Resolve Source (Cache with Broadcast Fallback)
 			sources := []string{"zigbee", "zwave", "ccu2"} // List of known sources
-			if cachedSource, ok := s.sourceCache[req.TargetEntity]; ok {
+			if cachedSource, ok := s.cachedSource(req.TargetEntity); ok {
 				sources = []string{cachedSource}
 				slog.Debug("Source cache hit", "device", req.TargetEntity, "source", cachedSource)
 			} else {
@@ -366,7 +385,7 @@ func (s *Service) Run(ctx context.Context) error {
 			
 			// Resolve Source
 			sources := []string{"zigbee", "zwave", "ccu2"}
-			if cachedSource, ok := s.sourceCache[req.TargetEntity]; ok {
+			if cachedSource, ok := s.cachedSource(req.TargetEntity); ok {
 				sources = []string{cachedSource}
 			}
 
@@ -403,4 +422,18 @@ func (s *Service) Run(ctx context.Context) error {
 
 	<-ctx.Done()
 	return nil
+}
+
+func (s *Service) cachedSource(deviceID string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	src, ok := s.sourceCache[deviceID]
+	return src, ok
+}
+
+func (s *Service) z2mSceneID(group, name string) (int, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	id, ok := s.z2mScenes[group][name]
+	return id, ok
 }

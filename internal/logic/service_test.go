@@ -53,7 +53,9 @@ type fakeNATS struct {
 	subscribed     chan struct{}
 	mu             sync.Mutex
 	subjects       []string
+	events         [][]byte
 	kv             map[string]string
+	kvGetErr       error
 	panicOnPublish bool
 }
 
@@ -61,14 +63,25 @@ func newFakeNATS() *fakeNATS {
 	return &fakeNATS{subscribed: make(chan struct{}), kv: map[string]string{}}
 }
 
-func (f *fakeNATS) Publish(subject string, _ []byte) error {
+func (f *fakeNATS) Publish(subject string, data []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.panicOnPublish {
 		panic("nats publish failed")
 	}
 	f.subjects = append(f.subjects, subject)
+	f.events = append(f.events, data)
 	return nil
+}
+
+func (f *fakeNATS) GetKV(key string) ([]byte, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.kvGetErr != nil {
+		return nil, false, f.kvGetErr
+	}
+	v, ok := f.kv[key]
+	return []byte(v), ok, nil
 }
 
 func (f *fakeNATS) PutKV(key string, data []byte) error {
@@ -130,8 +143,8 @@ func TestServiceConcurrentEventsAndActions(t *testing.T) {
 		defer wg.Done()
 		// Call the handler directly: the subscribed callback only enqueues.
 		for range iterations {
-			svc.handleMQTTMessage("ccu2/cover/ba_gf_shutter_1/state", []byte("ON"))
-			svc.handleMQTTMessage("zigbee/bridge/groups", []byte(`[{"friendly_name":"lr_lights","scenes":[{"id":3,"name":"evening"}]}]`))
+			svc.handleMQTTMessage("ccu2/cover/ba_gf_shutter_1/state", []byte("ON"), false)
+			svc.handleMQTTMessage("zigbee/bridge/groups", []byte(`[{"friendly_name":"lr_lights","scenes":[{"id":3,"name":"evening"}]}]`), false)
 		}
 	}()
 	go func() {
@@ -171,7 +184,7 @@ func TestServiceIgnoresCommandTopics(t *testing.T) {
 		"zigbee/kt_island/set/brightness",
 		"zwave/lr_dimmer/switch_multilevel/endpoint_1/targetValue/set",
 	} {
-		svc.handleMQTTMessage(topic, []byte("CLOSE"))
+		svc.handleMQTTMessage(topic, []byte("CLOSE"), false)
 	}
 	if len(n.subjects) != 0 || len(n.kv) != 0 {
 		t.Errorf("command topics produced events %v / KV %v", n.subjects, n.kv)
@@ -180,7 +193,7 @@ func TestServiceIgnoresCommandTopics(t *testing.T) {
 		t.Error("command topic populated the source cache")
 	}
 
-	svc.handleMQTTMessage("ccu2/cover/OEQ1219312_1/state", []byte("ON"))
+	svc.handleMQTTMessage("ccu2/cover/OEQ1219312_1/state", []byte("ON"), false)
 	if want := "binary_sensor.OEQ1219312_1"; n.kv[want] != "ON" {
 		t.Errorf("state topic not mirrored, KV = %v", n.kv)
 	}
@@ -197,7 +210,7 @@ func TestHandlersRecoverFromPanics(t *testing.T) {
 		Command: &action.ActionRequest_Light{Light: &light.LightCommand{State: common.BinaryState_BINARY_STATE_ON}},
 	})
 	svc.handleAction(&natsgo.Msg{Subject: "iot.v1.actions.test", Data: data})
-	svc.handleMQTTMessage("ccu2/cover/x/state", []byte("ON"))
+	svc.handleMQTTMessage("ccu2/cover/x/state", []byte("ON"), false)
 
 	// Handlers stay usable after a panic.
 	m.panicOnPublish = false
@@ -223,7 +236,7 @@ func TestRunProcessesQueuedMessagesInOrderOnShutdown(t *testing.T) {
 	var want []string
 	for i := range count {
 		dev := fmt.Sprintf("dev%d", i)
-		m.handlers["ccu2/#"]("ccu2/contact/"+dev+"/state", []byte("ON"))
+		m.handlers["ccu2/#"]("ccu2/contact/"+dev+"/state", []byte("ON"), false)
 		want = append(want, "iot.v1.events.ccu2.global.binary_sensor."+dev)
 	}
 	cancel()

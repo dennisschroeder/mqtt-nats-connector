@@ -119,12 +119,28 @@ func (s *Service) Run(ctx context.Context) error {
 // callback returns, so processing inline throttles the broker; on (re)connect
 // the retained snapshot plus the session backlog then exceeds Mosquitto's
 // max_queued_messages and messages get dropped.
+//
+// Deliberate trade-off: the message is acked once it is queued, so queued
+// messages are at-most-once on a hard kill (OOM, SIGKILL, power loss); a
+// graceful shutdown still processes them. Acking manually after processing
+// (SetAutoAckDisabled) would bring back the inflight throttling and overflow.
 func (s *Service) enqueue(topic string, payload []byte) {
+	// Checked first because select picks randomly when the inbox has room too.
+	select {
+	case <-s.stopping:
+		s.dropDuringShutdown(topic)
+		return
+	default:
+	}
 	select {
 	case s.inbox <- mqttMessage{topic: topic, payload: payload}:
 	case <-s.stopping:
-		slog.Warn("Dropping MQTT message received during shutdown", "topic", topic)
+		s.dropDuringShutdown(topic)
 	}
+}
+
+func (s *Service) dropDuringShutdown(topic string) {
+	slog.Warn("Not processing MQTT message received during shutdown; the broker redelivers it to the session unless the ack already went out", "topic", topic)
 }
 
 // processInbox handles MQTT messages in arrival order on a single goroutine.

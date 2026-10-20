@@ -28,7 +28,7 @@ func (t *ZWaveTransformer) Transform(topic string, payload []byte) (string, stri
 	commandClass := parts[1] // switch_multilevel, manufacturer_specific, etc.
 	// Filter for relevant command classes
 	if commandClass != "switch_multilevel" && commandClass != "switch_binary" {
-		slog.Info("DISCOVERY MODE: Unmapped Z-Wave payload", "topic", topic, "deviceID", deviceID, "payload", string(payload))
+		slog.Debug("DISCOVERY MODE: Unmapped Z-Wave payload", "topic", topic, "deviceID", deviceID, "payload", string(payload))
 		return "zwave", deviceID, nil
 	}
 
@@ -69,7 +69,7 @@ func (t *ZWaveTransformer) Transform(topic string, payload []byte) (string, stri
 			}
 		}
 	} else {
-		slog.Info("DISCOVERY MODE: Unmapped Z-Wave payload", "topic", topic, "deviceID", deviceID, "payload", string(payload))
+		slog.Debug("DISCOVERY MODE: Unmapped Z-Wave payload", "topic", topic, "deviceID", deviceID, "payload", string(payload))
 		return "zwave", deviceID, nil
 	}
 

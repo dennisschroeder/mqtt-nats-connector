@@ -4,7 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/dennisschroeder/mqtt-nats-connector/internal/logic"
 	"github.com/dennisschroeder/mqtt-nats-connector/internal/transport/mqtt"
@@ -13,11 +15,11 @@ import (
 )
 
 var (
-	natsURL    string
-	mqttBroker string
-	clientID   string
+	natsURL      string
+	mqttBroker   string
+	clientID     string
 	mirrorTopics string
-	logLevel   string
+	logLevel     string
 )
 
 var rootCmd = &cobra.Command{
@@ -44,13 +46,21 @@ var rootCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+
 		topics := strings.Split(mirrorTopics, ",")
 		svc := logic.NewService(mClient, nClient, topics)
-		
-		if err := svc.Run(context.Background()); err != nil {
+
+		// Run disconnects MQTT itself during shutdown; NATS goes last because
+		// queued MQTT messages are still published to it.
+		err = svc.Run(ctx)
+		nClient.Close()
+		if err != nil {
 			slog.Error("Service failed", "error", err)
 			os.Exit(1)
 		}
+		slog.Info("Shutdown complete")
 	},
 }
 

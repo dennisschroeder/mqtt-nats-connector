@@ -57,7 +57,7 @@ func (t *Z2MTransformer) TransformMulti(topic string, payload []byte) (string, s
 		eventType = strings.Join(parts[1:], "/")
 	}
 
-	slog.Info("Processing Z2M message", "topic", topic, "deviceID", deviceID, "eventType", eventType)
+	slog.Debug("Processing Z2M message", "topic", topic, "deviceID", deviceID, "eventType", eventType)
 
 	// Ignore non-state events for Zigbee (like availability or bridge/#).
 	// The <device>/action topic is z2m's HA device-trigger mirror of the "action"

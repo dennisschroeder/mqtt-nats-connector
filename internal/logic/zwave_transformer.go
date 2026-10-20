@@ -3,6 +3,7 @@ package logic
 import (
 	"encoding/json"
 	"log/slog"
+	"strconv"
 	"strings"
 
 	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/common"
@@ -29,6 +30,14 @@ func (t *ZWaveTransformer) Transform(topic string, payload []byte) (string, stri
 	// Filter for relevant command classes
 	if commandClass != "switch_multilevel" && commandClass != "switch_binary" {
 		slog.Debug("DISCOVERY MODE: Unmapped Z-Wave payload", "topic", topic, "deviceID", deviceID, "payload", string(payload))
+		return "zwave", deviceID, nil
+	}
+
+	// All endpoints share one entity (and KV key), and actions target
+	// endpoint_1. On the Fibaro FGD-212 dimmers endpoint_2 is the S2 input
+	// channel, not the load, so mixing it in flips the light state.
+	if endpointIndex(parts) >= 2 {
+		slog.Debug("Ignoring secondary Z-Wave endpoint", "topic", topic)
 		return "zwave", deviceID, nil
 	}
 
@@ -78,4 +87,17 @@ func (t *ZWaveTransformer) Transform(topic string, payload []byte) (string, stri
 	}
 
 	return "zwave", deviceID, event
+}
+
+// endpointIndex returns N for an "endpoint_N" topic segment, or 0 if there is
+// none (zwave-js-ui omits it for the root device in some topic layouts).
+func endpointIndex(parts []string) int {
+	for _, p := range parts {
+		if n, ok := strings.CutPrefix(p, "endpoint_"); ok {
+			if i, err := strconv.Atoi(n); err == nil {
+				return i
+			}
+		}
+	}
+	return 0
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -41,6 +42,7 @@ type mqttClient interface {
 type natsClient interface {
 	Publish(subject string, data []byte) error
 	PutKV(key string, data []byte) error
+	GetKV(key string) (value []byte, found bool, err error)
 	Subscribe(subject string, handler natsgo.MsgHandler) (*natsgo.Subscription, error)
 }
 
@@ -51,8 +53,9 @@ const (
 )
 
 type mqttMessage struct {
-	topic   string
-	payload []byte
+	topic    string
+	payload  []byte
+	retained bool
 }
 
 type Service struct {
@@ -69,6 +72,9 @@ type Service struct {
 
 	inbox    chan mqttMessage
 	stopping chan struct{}
+
+	// Only touched by the inbox worker.
+	resyncChanged, resyncUnchanged, resyncFailed int
 }
 
 func NewService(m mqttClient, n natsClient, topics []string) *Service {
@@ -124,7 +130,7 @@ func (s *Service) Run(ctx context.Context) error {
 // messages are at-most-once on a hard kill (OOM, SIGKILL, power loss); a
 // graceful shutdown still processes them. Acking manually after processing
 // (SetAutoAckDisabled) would bring back the inflight throttling and overflow.
-func (s *Service) enqueue(topic string, payload []byte) {
+func (s *Service) enqueue(topic string, payload []byte, retained bool) {
 	// Checked first because select picks randomly when the inbox has room too.
 	select {
 	case <-s.stopping:
@@ -133,7 +139,7 @@ func (s *Service) enqueue(topic string, payload []byte) {
 	default:
 	}
 	select {
-	case s.inbox <- mqttMessage{topic: topic, payload: payload}:
+	case s.inbox <- mqttMessage{topic: topic, payload: payload, retained: retained}:
 	case <-s.stopping:
 		s.dropDuringShutdown(topic)
 	}
@@ -149,18 +155,31 @@ func (s *Service) processInbox(done chan<- struct{}) {
 	for {
 		select {
 		case m := <-s.inbox:
-			s.handleMQTTMessage(m.topic, m.payload)
+			s.handleMQTTMessage(m.topic, m.payload, m.retained)
+			if len(s.inbox) == 0 {
+				s.logResync()
+			}
 		case <-s.stopping:
 			for {
 				select {
 				case m := <-s.inbox:
-					s.handleMQTTMessage(m.topic, m.payload)
+					s.handleMQTTMessage(m.topic, m.payload, m.retained)
 				default:
+					s.logResync()
 					return
 				}
 			}
 		}
 	}
+}
+
+// logResync summarizes a retained snapshot once the burst has been processed.
+func (s *Service) logResync() {
+	if s.resyncChanged == 0 && s.resyncUnchanged == 0 && s.resyncFailed == 0 {
+		return
+	}
+	slog.Info("Resynced state from retained MQTT snapshot", "changed", s.resyncChanged, "unchanged", s.resyncUnchanged, "failed", s.resyncFailed)
+	s.resyncChanged, s.resyncUnchanged, s.resyncFailed = 0, 0, 0
 }
 
 // shutdown stops intake on both sides before closing anything, because each
@@ -190,10 +209,16 @@ func (s *Service) shutdown(sub *natsgo.Subscription, workerDone <-chan struct{})
 	}
 }
 
-func (s *Service) handleMQTTMessage(mqttTopic string, payload []byte) {
+// handleMQTTMessage turns a message into NATS events and KV state.
+//
+// Retained messages are the broker's snapshot replayed on every (re)subscribe,
+// not new occurrences. They only resync state: momentary payloads (button
+// actions) are dropped, and a state is published as an event only if it
+// differs from the KV, i.e. the change was missed while disconnected.
+func (s *Service) handleMQTTMessage(mqttTopic string, payload []byte, retained bool) {
 	defer recoverPanic("mqtt message", mqttTopic)
 
-	slog.Debug("Received MQTT message", "topic", mqttTopic, "payload", string(payload))
+	slog.Debug("Received MQTT message", "topic", mqttTopic, "payload", string(payload), "retained", retained)
 
 	if isCommandTopic(mqttTopic) {
 		return
@@ -268,22 +293,26 @@ func (s *Service) handleMQTTMessage(mqttTopic string, payload []byte) {
 			continue
 		}
 
+		domain := eventDomain(eventEnvelope)
+		key, val, hasState := stateKV(domain, eventEnvelope)
+
+		idPrefix := "evt"
+		if retained {
+			if !hasState || isMomentary(mqttTopic, eventEnvelope) {
+				slog.Debug("Ignoring retained non-state payload", "topic", mqttTopic, "domain", domain)
+				continue
+			}
+			if !s.resyncNeedsEvent(key, val) {
+				continue
+			}
+			idPrefix = "resync"
+		}
+
 		// Wrap metadata
-		eventEnvelope.Id = fmt.Sprintf("evt_%d", time.Now().UnixNano())
+		eventEnvelope.Id = fmt.Sprintf("%s_%d", idPrefix, time.Now().UnixNano())
 		eventEnvelope.Source = source
 		eventEnvelope.Topic = mqttTopic
 		eventEnvelope.Timestamp = timestamppb.Now()
-
-		// Determine Domain
-		domain := "unknown"
-		switch eventEnvelope.Payload.(type) {
-		case *envelope.EventEnvelope_BinarySensor:
-			domain = "binary_sensor"
-		case *envelope.EventEnvelope_Light:
-			domain = "light"
-		case *envelope.EventEnvelope_Sensor:
-			domain = "sensor"
-		}
 
 		// Construct NATS Subject (ADR 010)
 		natsSubject := fmt.Sprintf("iot.v1.events.%s.%s.%s.%s", source, areaSlug, domain, deviceID)
@@ -295,49 +324,104 @@ func (s *Service) handleMQTTMessage(mqttTopic string, payload []byte) {
 			continue
 		}
 
-		slog.Debug("Publishing NATS event", "subject", natsSubject, "area", areaSlug)
+		// KV first: consumers evaluate their conditions against the KV when
+		// the event arrives.
+		if hasState {
+			s.putState(key, val)
+		}
+
+		slog.Debug("Publishing NATS event", "subject", natsSubject, "area", areaSlug, "retained", retained)
 		if err := s.nats.Publish(natsSubject, data); err != nil {
 			slog.Error("Failed to publish to NATS", "subject", natsSubject, "error", err)
 		}
+	}
+}
 
-		// Extract plain value for State Store (KV)
-		if domain == "sensor" {
-			if sensorEvent := eventEnvelope.GetSensor(); sensorEvent != nil {
-				key := fmt.Sprintf("%s.%s", domain, sensorEvent.Id)
-				if err := s.nats.PutKV(key, []byte(sensorEvent.Value)); err != nil {
-					slog.Error("Failed to update KV state", "key", key, "error", err)
-				} else {
-					slog.Debug("Updated KV state", "key", key, "value", sensorEvent.Value)
-				}
-			}
-		} else if domain == "binary_sensor" {
-			if bsEvent := eventEnvelope.GetBinarySensor(); bsEvent != nil {
-				key := fmt.Sprintf("%s.%s", domain, bsEvent.EntityId)
-				val := "OFF"
-				if bsEvent.State == common.BinaryState_BINARY_STATE_ON {
-					val = "ON"
-				}
-				if err := s.nats.PutKV(key, []byte(val)); err != nil {
-					slog.Error("Failed to update KV state", "key", key, "error", err)
-				} else {
-					slog.Debug("Updated KV state", "key", key, "value", val)
-				}
-			}
-		} else if domain == "light" {
-			if lightEvent := eventEnvelope.GetLight(); lightEvent != nil {
-				key := fmt.Sprintf("%s.%s", domain, lightEvent.EntityId)
-				val := "OFF"
-				if lightEvent.State == common.BinaryState_BINARY_STATE_ON {
-					val = "ON"
-				}
-				if err := s.nats.PutKV(key, []byte(val)); err != nil {
-					slog.Error("Failed to update KV state", "key", key, "error", err)
-				} else {
-					slog.Debug("Updated KV state", "key", key, "value", val)
-				}
-			}
+// resyncNeedsEvent reports whether a retained state differs from the KV, i.e.
+// the change was missed while disconnected. On a lookup error the state is
+// skipped entirely: publishing could flood consumers with known states, and a
+// blind write would stall the inbox worker on a struggling NATS. The next
+// reconnect resyncs it.
+func (s *Service) resyncNeedsEvent(key, val string) bool {
+	cur, found, err := s.nats.GetKV(key)
+	switch {
+	case err != nil:
+		slog.Warn("Failed to read KV state for resync, skipping", "key", key, "error", err)
+		s.resyncFailed++
+		return false
+	case found && string(cur) == val:
+		s.resyncUnchanged++
+		return false
+	default:
+		slog.Info("Retained state differs from KV, publishing missed change", "key", key, "kv", string(cur), "retained", val)
+		s.resyncChanged++
+		return true
+	}
+}
+
+func (s *Service) putState(key, val string) {
+	if err := s.nats.PutKV(key, []byte(val)); err != nil {
+		slog.Error("Failed to update KV state", "key", key, "error", err)
+	} else {
+		slog.Debug("Updated KV state", "key", key, "value", val)
+	}
+}
+
+func eventDomain(env *envelope.EventEnvelope) string {
+	switch env.Payload.(type) {
+	case *envelope.EventEnvelope_BinarySensor:
+		return "binary_sensor"
+	case *envelope.EventEnvelope_Light:
+		return "light"
+	case *envelope.EventEnvelope_Sensor:
+		return "sensor"
+	}
+	return "unknown"
+}
+
+// stateKV returns the State Store (KV) entry an event maps to.
+func stateKV(domain string, env *envelope.EventEnvelope) (key, val string, ok bool) {
+	onOff := func(state common.BinaryState) string {
+		if state == common.BinaryState_BINARY_STATE_ON {
+			return "ON"
+		}
+		return "OFF"
+	}
+	switch domain {
+	case "sensor":
+		if e := env.GetSensor(); e != nil {
+			return domain + "." + e.Id, e.Value, true
+		}
+	case "binary_sensor":
+		if e := env.GetBinarySensor(); e != nil {
+			return domain + "." + e.EntityId, onOff(e.State), true
+		}
+	case "light":
+		if e := env.GetLight(); e != nil {
+			return domain + "." + e.EntityId, onOff(e.State), true
 		}
 	}
+	return "", "", false
+}
+
+// isMomentary reports whether env records an occurrence rather than a state.
+// A retained copy of it is an old button press and must never be replayed.
+func isMomentary(topic string, env *envelope.EventEnvelope) bool {
+	// Z2M carries button presses in the "action" field, which the transformer
+	// maps to a doorbell event; with retain enabled the last press stays on the
+	// device's state topic until its next report.
+	if bs := env.GetBinarySensor(); bs != nil && bs.DeviceClass == "doorbell" {
+		return true
+	}
+	// Z-Wave "On"/"Off" are write-only level-change buttons, not the switch
+	// state (that is currentValue), but zwave-js-ui retains them too.
+	if strings.HasPrefix(topic, "zwave/") {
+		switch path.Base(topic) {
+		case "On", "Off":
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) handleAction(msg *natsgo.Msg) {

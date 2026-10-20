@@ -1,6 +1,7 @@
 package nats
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -60,6 +61,18 @@ func (c *Client) Publish(subject string, data []byte) error {
 func (c *Client) PutKV(key string, data []byte) error {
 	_, err := c.kv.Put(key, data)
 	return err
+}
+
+// GetKV returns found=false without an error if the key does not exist.
+func (c *Client) GetKV(key string) (value []byte, found bool, err error) {
+	entry, err := c.kv.Get(key)
+	if errors.Is(err, nats.ErrKeyNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return entry.Value(), true, nil
 }
 
 func (c *Client) Subscribe(subject string, handler nats.MsgHandler) (*nats.Subscription, error) {

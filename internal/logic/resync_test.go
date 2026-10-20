@@ -121,15 +121,16 @@ func TestRetainedStateResync(t *testing.T) {
 		})
 	}
 
-	t.Run("KV read error updates state without event", func(t *testing.T) {
+	t.Run("KV read error skips the state", func(t *testing.T) {
 		svc, n := newTestService()
+		n.kv[key] = "OFF"
 		n.kvGetErr = errors.New("nats: timeout")
 		svc.handleMQTTMessage(topic, []byte("ON"), true)
-		if len(n.subjects) != 0 {
-			t.Errorf("published %v despite KV read error", n.subjects)
+		if len(n.subjects) != 0 || n.kv[key] != "OFF" {
+			t.Errorf("KV read error produced events %v / KV %v", n.subjects, n.kv)
 		}
-		if n.kv[key] != "ON" {
-			t.Errorf("KV = %v, want %s=ON", n.kv, key)
+		if svc.resyncChanged != 0 || svc.resyncFailed != 1 {
+			t.Errorf("changed=%d failed=%d, want 0/1", svc.resyncChanged, svc.resyncFailed)
 		}
 	})
 
@@ -164,4 +165,51 @@ func TestRunPassesRetainedFlagThrough(t *testing.T) {
 	if len(n.subjects) != 0 {
 		t.Errorf("retained snapshot published %v", n.subjects)
 	}
+}
+
+// FGD-212 dimmers report the load on endpoint_1 and the S2 channel on
+// endpoint_2; both used to share the light.<node> KV key, so every snapshot
+// flipped it and produced two phantom resync events.
+func TestRetainedZWaveDualEndpointSnapshotIsStable(t *testing.T) {
+	svc, n := newTestService()
+	snapshot := func() {
+		svc.handleMQTTMessage("zwave/ro_light_1/switch_multilevel/endpoint_1/currentValue", []byte(`{"time":1,"value":0}`), true)
+		svc.handleMQTTMessage("zwave/ro_light_1/switch_multilevel/endpoint_2/currentValue", []byte(`{"time":1,"value":99}`), true)
+	}
+
+	snapshot()
+	if n.kv["light.ro_light_1"] != "OFF" || len(n.subjects) != 1 {
+		t.Fatalf("first snapshot: KV %v, events %v; want light.ro_light_1=OFF from endpoint_1 and one event", n.kv, n.subjects)
+	}
+
+	n.subjects = nil
+	snapshot()
+	if len(n.subjects) != 0 {
+		t.Errorf("identical second snapshot published %v", n.subjects)
+	}
+}
+
+// Consumers read the KV in their event handlers, so it must be updated first.
+func TestKVUpdatedBeforeEventIsPublished(t *testing.T) {
+	n := &orderNATS{fakeNATS: newFakeNATS()}
+	svc := NewService(&fakeMQTT{handlers: map[string]mqtt.MessageHandler{}}, n, nil)
+	svc.handleMQTTMessage("ccu2/switch/hm_light/state", []byte("ON"), false)
+	if want := []string{"put", "publish"}; !slices.Equal(n.calls, want) {
+		t.Errorf("calls %v, want %v", n.calls, want)
+	}
+}
+
+type orderNATS struct {
+	*fakeNATS
+	calls []string
+}
+
+func (o *orderNATS) Publish(subject string, data []byte) error {
+	o.calls = append(o.calls, "publish")
+	return o.fakeNATS.Publish(subject, data)
+}
+
+func (o *orderNATS) PutKV(key string, data []byte) error {
+	o.calls = append(o.calls, "put")
+	return o.fakeNATS.PutKV(key, data)
 }

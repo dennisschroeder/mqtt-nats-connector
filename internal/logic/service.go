@@ -74,7 +74,7 @@ type Service struct {
 	stopping chan struct{}
 
 	// Only touched by the inbox worker.
-	resyncChanged, resyncUnchanged int
+	resyncChanged, resyncUnchanged, resyncFailed int
 }
 
 func NewService(m mqttClient, n natsClient, topics []string) *Service {
@@ -175,11 +175,11 @@ func (s *Service) processInbox(done chan<- struct{}) {
 
 // logResync summarizes a retained snapshot once the burst has been processed.
 func (s *Service) logResync() {
-	if s.resyncChanged == 0 && s.resyncUnchanged == 0 {
+	if s.resyncChanged == 0 && s.resyncUnchanged == 0 && s.resyncFailed == 0 {
 		return
 	}
-	slog.Info("Resynced state from retained MQTT snapshot", "changed", s.resyncChanged, "unchanged", s.resyncUnchanged)
-	s.resyncChanged, s.resyncUnchanged = 0, 0
+	slog.Info("Resynced state from retained MQTT snapshot", "changed", s.resyncChanged, "unchanged", s.resyncUnchanged, "failed", s.resyncFailed)
+	s.resyncChanged, s.resyncUnchanged, s.resyncFailed = 0, 0, 0
 }
 
 // shutdown stops intake on both sides before closing anything, because each
@@ -302,11 +302,7 @@ func (s *Service) handleMQTTMessage(mqttTopic string, payload []byte, retained b
 				slog.Debug("Ignoring retained non-state payload", "topic", mqttTopic, "domain", domain)
 				continue
 			}
-			switch s.resyncDecision(key, val) {
-			case resyncSkip:
-				continue
-			case resyncStateOnly:
-				s.putState(key, val)
+			if !s.resyncNeedsEvent(key, val) {
 				continue
 			}
 			idPrefix = "resync"
@@ -328,42 +324,38 @@ func (s *Service) handleMQTTMessage(mqttTopic string, payload []byte, retained b
 			continue
 		}
 
+		// KV first: consumers evaluate their conditions against the KV when
+		// the event arrives.
+		if hasState {
+			s.putState(key, val)
+		}
+
 		slog.Debug("Publishing NATS event", "subject", natsSubject, "area", areaSlug, "retained", retained)
 		if err := s.nats.Publish(natsSubject, data); err != nil {
 			slog.Error("Failed to publish to NATS", "subject", natsSubject, "error", err)
 		}
-
-		if hasState {
-			s.putState(key, val)
-		}
 	}
 }
 
-type resyncAction int
-
-const (
-	resyncSkip      resyncAction = iota // state already known
-	resyncStateOnly                     // update KV without an event
-	resyncEvent                         // change missed while disconnected
-)
-
-// resyncDecision compares a retained state with the KV. On a lookup error the
-// KV is still updated but no event is published, so a NATS hiccup during the
-// snapshot cannot replay hundreds of states as new events.
-func (s *Service) resyncDecision(key, val string) resyncAction {
+// resyncNeedsEvent reports whether a retained state differs from the KV, i.e.
+// the change was missed while disconnected. On a lookup error the state is
+// skipped entirely: publishing could flood consumers with known states, and a
+// blind write would stall the inbox worker on a struggling NATS. The next
+// reconnect resyncs it.
+func (s *Service) resyncNeedsEvent(key, val string) bool {
 	cur, found, err := s.nats.GetKV(key)
 	switch {
 	case err != nil:
-		slog.Warn("Failed to read KV state for resync, updating without event", "key", key, "error", err)
-		s.resyncChanged++
-		return resyncStateOnly
+		slog.Warn("Failed to read KV state for resync, skipping", "key", key, "error", err)
+		s.resyncFailed++
+		return false
 	case found && string(cur) == val:
 		s.resyncUnchanged++
-		return resyncSkip
+		return false
 	default:
 		slog.Info("Retained state differs from KV, publishing missed change", "key", key, "kv", string(cur), "retained", val)
 		s.resyncChanged++
-		return resyncEvent
+		return true
 	}
 }
 

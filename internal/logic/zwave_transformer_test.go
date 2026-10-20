@@ -28,7 +28,7 @@ func TestZWaveTransformer(t *testing.T) {
 	}{
 		{
 			name:         "Switch On",
-			topic:        "zwave/me_light_1/switch_multilevel/endpoint_2/On",
+			topic:        "zwave/me_light_1/switch_multilevel/endpoint_1/On",
 			payload:      []byte(`{"time":1774310506562}`),
 			wantSource:   "zwave",
 			wantDeviceID: "me_light_1",
@@ -37,7 +37,7 @@ func TestZWaveTransformer(t *testing.T) {
 		},
 		{
 			name:         "Switch Off",
-			topic:        "zwave/me_light_1/switch_multilevel/endpoint_2/Off",
+			topic:        "zwave/me_light_1/switch_multilevel/endpoint_1/Off",
 			payload:      []byte(`{"time":1774310506564}`),
 			wantSource:   "zwave",
 			wantDeviceID: "me_light_1",
@@ -46,12 +46,29 @@ func TestZWaveTransformer(t *testing.T) {
 		},
 		{
 			name:         "Current Value (Brightness)",
-			topic:        "zwave/me_light_1/switch_multilevel/endpoint_2/currentValue",
+			topic:        "zwave/me_light_1/switch_multilevel/endpoint_1/currentValue",
 			payload:      []byte(`{"value":50.0}`),
 			wantSource:   "zwave",
 			wantDeviceID: "me_light_1",
 			wantPayload:  &envelope.EventEnvelope_Light{},
 			checkState:   common.BinaryState_BINARY_STATE_ON,
+		},
+		{
+			name:         "Root endpoint current value",
+			topic:        "zwave/is_light_1/switch_multilevel/endpoint_0/currentValue",
+			payload:      []byte(`{"value":99}`),
+			wantSource:   "zwave",
+			wantDeviceID: "is_light_1",
+			wantPayload:  &envelope.EventEnvelope_Light{},
+			checkState:   common.BinaryState_BINARY_STATE_ON,
+		},
+		{
+			name:         "Secondary endpoint (FGD-212 S2 channel) is ignored",
+			topic:        "zwave/me_light_1/switch_multilevel/endpoint_2/currentValue",
+			payload:      []byte(`{"value":99}`),
+			wantSource:   "zwave",
+			wantDeviceID: "me_light_1",
+			wantPayload:  nil,
 		},
 		{
 			name:         "Unknown endpoint (Discovery)",

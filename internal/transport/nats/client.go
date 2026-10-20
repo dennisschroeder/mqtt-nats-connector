@@ -3,18 +3,27 @@ package nats
 import (
 	"fmt"
 	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/nats-io/nats.go"
 )
 
+const drainTimeout = 5 * time.Second
+
 type Client struct {
-	nc *nats.Conn
-	js nats.JetStreamContext
-	kv nats.KeyValue
+	closed chan struct{}
+	nc     *nats.Conn
+	js     nats.JetStreamContext
+	kv     nats.KeyValue
 }
 
 func NewClient(url string) (*Client, error) {
-	nc, err := nats.Connect(url)
+	closed := make(chan struct{})
+	var once sync.Once
+	nc, err := nats.Connect(url, nats.ClosedHandler(func(*nats.Conn) {
+		once.Do(func() { close(closed) })
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("nats connect: %w", err)
 	}
@@ -22,13 +31,13 @@ func NewClient(url string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("jetstream init: %w", err)
 	}
-	
+
 	// Ensure the Key-Value store exists
 	kv, err := js.KeyValue("iot_state")
 	if err != nil {
 		if err == nats.ErrBucketNotFound {
 			kv, err = js.CreateKeyValue(&nats.KeyValueConfig{
-				Bucket: "iot_state",
+				Bucket:      "iot_state",
 				Description: "Latest state of all IoT devices",
 			})
 			if err != nil {
@@ -38,9 +47,9 @@ func NewClient(url string) (*Client, error) {
 			return nil, fmt.Errorf("get kv bucket: %w", err)
 		}
 	}
-	
+
 	slog.Info("NATS JetStream client connected with KV store", "url", url)
-	return &Client{nc: nc, js: js, kv: kv}, nil
+	return &Client{closed: closed, nc: nc, js: js, kv: kv}, nil
 }
 
 func (c *Client) Publish(subject string, data []byte) error {
@@ -57,6 +66,18 @@ func (c *Client) Subscribe(subject string, handler nats.MsgHandler) (*nats.Subsc
 	return c.nc.Subscribe(subject, handler)
 }
 
+// Close drains the connection so in-flight callbacks finish and pending
+// publishes are flushed before it closes.
 func (c *Client) Close() {
-	c.nc.Close()
+	if err := c.nc.Drain(); err != nil {
+		slog.Warn("NATS drain failed, closing", "error", err)
+		c.nc.Close()
+		return
+	}
+	select {
+	case <-c.closed:
+	case <-time.After(drainTimeout):
+		slog.Warn("NATS drain timed out, closing")
+		c.nc.Close()
+	}
 }

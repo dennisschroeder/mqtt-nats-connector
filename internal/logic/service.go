@@ -93,7 +93,6 @@ func NewService(m mqttClient, n natsClient, topics []string) *Service {
 			&HomematicTransformer{},
 			&StiebelTransformer{},
 			&ZWaveTransformer{},
-			// Before ESPHome, whose catch-all topic pattern also matches statestream topics.
 			&HAStatestreamTransformer{},
 			&ESPHomeTransformer{},
 		},
@@ -279,15 +278,19 @@ func (s *Service) handleMQTTMessage(mqttTopic string, payload []byte, retained b
 		return
 	}
 
-	// Update source cache
-	s.mu.Lock()
-	s.sourceCache[deviceID] = source
-	s.mu.Unlock()
-
-	// Resolve Area via iot-utils-go (ADR 009)
 	areaSlug := "global"
-	if area, ok := areas.GetByEntityID(deviceID); ok {
-		areaSlug = area.Slug
+	// HA statestream sensors are read-only and named by free-form HA object_ids:
+	// they must not steer action routing for a same-named target, nor land in
+	// an area because their name happens to start with a shortcode.
+	if source != haStatestreamSource {
+		s.mu.Lock()
+		s.sourceCache[deviceID] = source
+		s.mu.Unlock()
+
+		// Resolve Area via iot-utils-go (ADR 009)
+		if area, ok := areas.GetByEntityID(deviceID); ok {
+			areaSlug = area.Slug
+		}
 	}
 
 	for _, eventEnvelope := range eventEnvelopes {

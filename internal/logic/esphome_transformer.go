@@ -14,7 +14,9 @@ type ESPHomeTransformer struct{}
 
 func (t *ESPHomeTransformer) Accepts(topic string) bool {
 	// Matches ESPHome default state topics like: <device_name>/<domain>/<component>/state
-	return strings.Count(topic, "/") == 3 && strings.HasSuffix(topic, "/state")
+	// HA statestream topics have the same shape but are not ESPHome devices.
+	return strings.Count(topic, "/") == 3 && strings.HasSuffix(topic, "/state") &&
+		!strings.HasPrefix(topic, haStatestreamBaseTopic)
 }
 
 func (t *ESPHomeTransformer) Transform(topic string, payload []byte) (string, string, *envelope.EventEnvelope) {

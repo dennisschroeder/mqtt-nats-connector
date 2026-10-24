@@ -193,3 +193,40 @@ func TestZ2MTransformerDoorbellStatusWithoutActionYieldsOff(t *testing.T) {
 		t.Errorf("unexpected doorbell event: %+v", bs.BinarySensor)
 	}
 }
+
+// z2m contact=true means closed; events follow the HA door/window convention
+// where ON means open.
+func TestZ2MTransformerContact(t *testing.T) {
+	transformer := &Z2MTransformer{}
+
+	tests := []struct {
+		deviceID  string
+		payload   string
+		wantState common.BinaryState
+		wantClass string
+	}{
+		{"be_window_contact", `{"battery_low":false,"contact":true,"linkquality":255,"tamper":false}`, common.BinaryState_BINARY_STATE_OFF, "window"},
+		{"be_window_contact", `{"battery_low":false,"contact":false,"linkquality":255,"tamper":false}`, common.BinaryState_BINARY_STATE_ON, "window"},
+		{"ha_front_door_contact", `{"contact":false}`, common.BinaryState_BINARY_STATE_ON, "door"},
+		{"gr_gate_contact", `{"contact":true}`, common.BinaryState_BINARY_STATE_OFF, "opening"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.deviceID+" "+tt.payload, func(t *testing.T) {
+			_, devID, envs := transformer.TransformMulti("zigbee/"+tt.deviceID, []byte(tt.payload))
+			if devID != tt.deviceID {
+				t.Errorf("got deviceID %q, want %q", devID, tt.deviceID)
+			}
+			if len(envs) != 1 {
+				t.Fatalf("expected exactly 1 event, got %d", len(envs))
+			}
+			bs := envs[0].GetBinarySensor()
+			if bs == nil {
+				t.Fatalf("expected BinarySensor payload, got %T", envs[0].Payload)
+			}
+			if bs.EntityId != tt.deviceID || bs.State != tt.wantState || bs.DeviceClass != tt.wantClass {
+				t.Errorf("got %+v, want entity %s state %v class %s", bs, tt.deviceID, tt.wantState, tt.wantClass)
+			}
+		})
+	}
+}

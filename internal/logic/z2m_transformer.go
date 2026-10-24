@@ -22,6 +22,7 @@ type Z2MPayload struct {
 	Occupancy    *bool     `json:"occupancy"`
 	Presence     *bool     `json:"presence"`
 	PirDetection *bool     `json:"pir_detection"`
+	Contact      *bool     `json:"contact"`
 	Action       *string   `json:"action"`
 	State       *string   `json:"state"`
 	Brightness  *float32  `json:"brightness"`
@@ -118,6 +119,26 @@ func (t *Z2MTransformer) TransformMulti(topic string, payload []byte) (string, s
 		})
 	}
 	
+	// Detection logic: Door/Window Contact
+	// z2m reports contact=true while the magnet is in place (closed). The event
+	// follows the HA binary_sensor door/window convention instead: ON = open.
+	if data.Contact != nil {
+		state := common.BinaryState_BINARY_STATE_ON
+		if *data.Contact {
+			state = common.BinaryState_BINARY_STATE_OFF
+		}
+
+		envelopes = append(envelopes, &envelope.EventEnvelope{
+			Payload: &envelope.EventEnvelope_BinarySensor{
+				BinarySensor: &binary_sensor.BinarySensorEvent{
+					EntityId:    deviceID,
+					State:       state,
+					DeviceClass: contactDeviceClass(deviceID),
+				},
+			},
+		})
+	}
+
 	// Detection logic: Doorbell/Action
 	if data.Action != nil || strings.Contains(deviceID, "doorbell") {
 		state := common.BinaryState_BINARY_STATE_OFF
@@ -215,4 +236,16 @@ func (t *Z2MTransformer) TransformMulti(topic string, payload []byte) (string, s
 	}
 
 	return "zigbee", deviceID, envelopes
+}
+
+// contactDeviceClass derives door vs. window from the friendly name, since z2m
+// exposes the same "contact" property for both.
+func contactDeviceClass(deviceID string) string {
+	switch {
+	case strings.Contains(deviceID, "window"):
+		return "window"
+	case strings.Contains(deviceID, "door"):
+		return "door"
+	}
+	return "opening"
 }

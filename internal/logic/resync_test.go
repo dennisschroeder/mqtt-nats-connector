@@ -85,6 +85,27 @@ func TestRetainedZWaveButtonsAreIgnored(t *testing.T) {
 	}
 }
 
+// A contact is a state: its retained copy resyncs the KV like any other state.
+func TestRetainedContactResync(t *testing.T) {
+	const topic = "zigbee/be_window_contact"
+	const key = "binary_sensor.be_window_contact"
+	closed := []byte(`{"battery_low":false,"contact":true,"linkquality":255,"tamper":false}`)
+
+	svc, n := newTestService()
+	svc.handleMQTTMessage(topic, closed, true)
+	if want := []string{"iot.v1.events.zigbee.ben.binary_sensor.be_window_contact"}; !slices.Equal(n.subjects, want) {
+		t.Fatalf("published %v, want %v", n.subjects, want)
+	}
+	if n.kv[key] != "OFF" {
+		t.Errorf("KV = %v, want %s=OFF", n.kv, key)
+	}
+
+	svc.handleMQTTMessage(topic, closed, true)
+	if len(n.subjects) != 1 {
+		t.Errorf("unchanged retained contact published again: %v", n.subjects)
+	}
+}
+
 func TestRetainedStateResync(t *testing.T) {
 	const topic = "ccu2/switch/hm_light/state"
 	const key = "binary_sensor.hm_light"

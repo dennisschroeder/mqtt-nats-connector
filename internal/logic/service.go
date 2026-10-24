@@ -93,6 +93,8 @@ func NewService(m mqttClient, n natsClient, topics []string) *Service {
 			&HomematicTransformer{},
 			&StiebelTransformer{},
 			&ZWaveTransformer{},
+			// Before ESPHome, whose catch-all topic pattern also matches statestream topics.
+			&HAStatestreamTransformer{},
 			&ESPHomeTransformer{},
 		},
 	}

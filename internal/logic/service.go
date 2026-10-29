@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,6 +71,8 @@ type Service struct {
 	sourceCache map[string]string         // deviceID -> source (e.g. "zigbee", "zwave")
 	z2mScenes   map[string]map[string]int // TargetEntity -> SceneName -> SceneID
 
+	sceneRetry *sceneRetrier
+
 	inbox    chan mqttMessage
 	stopping chan struct{}
 
@@ -77,7 +80,23 @@ type Service struct {
 	resyncChanged, resyncUnchanged, resyncFailed int
 }
 
-func NewService(m mqttClient, n natsClient, topics []string) *Service {
+// Option customizes a Service in NewService.
+type Option func(*options)
+
+type options struct {
+	sceneRetry SceneRetryConfig
+}
+
+// WithSceneRetry replaces DefaultSceneRetryConfig.
+func WithSceneRetry(cfg SceneRetryConfig) Option {
+	return func(o *options) { o.sceneRetry = cfg }
+}
+
+func NewService(m mqttClient, n natsClient, topics []string, opts ...Option) *Service {
+	o := options{sceneRetry: DefaultSceneRetryConfig()}
+	for _, opt := range opts {
+		opt(&o)
+	}
 	return &Service{
 		mqtt:        m,
 		nats:        n,
@@ -86,6 +105,7 @@ func NewService(m mqttClient, n natsClient, topics []string) *Service {
 		z2mScenes:   make(map[string]map[string]int),
 		inbox:       make(chan mqttMessage, inboxSize),
 		stopping:    make(chan struct{}),
+		sceneRetry:  newSceneRetrier(o.sceneRetry, m.Publish),
 		transformers: []Transformer{
 			&Z2MTransformer{},
 			&FritzTransformer{},
@@ -106,6 +126,17 @@ func (s *Service) Run(ctx context.Context) error {
 	for _, topic := range s.topics {
 		slog.Info("Mirroring topic", "topic", topic)
 		if err := s.mqtt.Subscribe(topic, s.enqueue); err != nil {
+			return err
+		}
+	}
+	if !s.sceneRetry.cfg.enabled() {
+		slog.Info("Zigbee scene recall retry disabled")
+	}
+	// Usually zigbee/# already covers it; a second, overlapping subscription
+	// would deliver every log line twice.
+	if s.sceneRetry.cfg.enabled() && !slices.ContainsFunc(s.topics, func(f string) bool { return topicMatches(f, z2mLoggingTopic) }) {
+		slog.Info("Subscribing to z2m logging for scene recall retries", "topic", z2mLoggingTopic)
+		if err := s.mqtt.Subscribe(z2mLoggingTopic, s.enqueue); err != nil {
 			return err
 		}
 	}
@@ -197,6 +228,8 @@ func (s *Service) shutdown(sub *natsgo.Subscription, workerDone <-chan struct{})
 		}
 	}
 
+	s.sceneRetry.close(shutdownTimeout)
+
 	// Disconnecting first lets the broker queue new messages in the persistent
 	// session for the next pod instead of handing them to this one.
 	slog.Info("Shutting down: disconnecting MQTT")
@@ -222,6 +255,13 @@ func (s *Service) handleMQTTMessage(mqttTopic string, payload []byte, retained b
 	slog.Debug("Received MQTT message", "topic", mqttTopic, "payload", string(payload), "retained", retained)
 
 	if isCommandTopic(mqttTopic) {
+		return
+	}
+
+	if mqttTopic == z2mLoggingTopic {
+		if !retained {
+			s.sceneRetry.handleLog(payload)
+		}
 		return
 	}
 
@@ -458,7 +498,7 @@ func (s *Service) handleAction(msg *natsgo.Msg) {
 			z2mTopic := fmt.Sprintf("zigbee/%s/set", req.TargetEntity)
 
 			// Try to parse sceneId as int or lookup from cache
-			sceneIDInt := -1
+			sceneIDInt := noSceneID
 			if id, err := strconv.Atoi(sceneCmd.SceneId); err == nil {
 				sceneIDInt = id
 			} else if id, ok := s.z2mSceneID(req.TargetEntity, sceneCmd.SceneId); ok {
@@ -466,7 +506,7 @@ func (s *Service) handleAction(msg *natsgo.Msg) {
 			}
 
 			var z2mPayload []byte
-			if sceneIDInt != -1 {
+			if sceneIDInt != noSceneID {
 				z2mPayload, _ = json.Marshal(map[string]interface{}{
 					"scene_recall": sceneIDInt,
 				})
@@ -478,6 +518,7 @@ func (s *Service) handleAction(msg *natsgo.Msg) {
 				slog.Info("Recalling Zigbee Scene by String (Fallback)", "group", req.TargetEntity, "scene", sceneCmd.SceneId)
 			}
 
+			s.sceneRetry.remember(req.TargetEntity, z2mTopic, z2mPayload, sceneIDInt)
 			s.mqtt.Publish(z2mTopic, z2mPayload)
 		}
 		return
@@ -544,6 +585,9 @@ func (s *Service) handleAction(msg *natsgo.Msg) {
 		}
 
 		for _, src := range sources {
+			if src == "zigbee" {
+				s.sceneRetry.forget(req.TargetEntity)
+			}
 			topic := fmt.Sprintf("%s/%s/set", src, req.TargetEntity)
 			var finalPayload []byte
 			if src == "zigbee" || src == "ccu2" {
@@ -597,6 +641,9 @@ func (s *Service) handleAction(msg *natsgo.Msg) {
 		}
 
 		for _, src := range sources {
+			if src == "zigbee" {
+				s.sceneRetry.forget(req.TargetEntity)
+			}
 			var topic string
 			if src == "ccu2" {
 				topic = fmt.Sprintf("%s/cover/%s/set", src, req.TargetEntity)

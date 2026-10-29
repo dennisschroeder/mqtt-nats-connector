@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,6 +71,8 @@ type Service struct {
 	sourceCache map[string]string         // deviceID -> source (e.g. "zigbee", "zwave")
 	z2mScenes   map[string]map[string]int // TargetEntity -> SceneName -> SceneID
 
+	sceneRetry *sceneRetrier
+
 	inbox    chan mqttMessage
 	stopping chan struct{}
 
@@ -86,6 +89,7 @@ func NewService(m mqttClient, n natsClient, topics []string) *Service {
 		z2mScenes:   make(map[string]map[string]int),
 		inbox:       make(chan mqttMessage, inboxSize),
 		stopping:    make(chan struct{}),
+		sceneRetry:  newSceneRetrier(DefaultSceneRetryConfig(), m.Publish),
 		transformers: []Transformer{
 			&Z2MTransformer{},
 			&FritzTransformer{},
@@ -99,6 +103,12 @@ func NewService(m mqttClient, n natsClient, topics []string) *Service {
 	}
 }
 
+// SetSceneRetry replaces the default scene recall retry settings; call it
+// before Run.
+func (s *Service) SetSceneRetry(cfg SceneRetryConfig) {
+	s.sceneRetry = newSceneRetrier(cfg, s.mqtt.Publish)
+}
+
 func (s *Service) Run(ctx context.Context) error {
 	workerDone := make(chan struct{})
 	go s.processInbox(workerDone)
@@ -106,6 +116,14 @@ func (s *Service) Run(ctx context.Context) error {
 	for _, topic := range s.topics {
 		slog.Info("Mirroring topic", "topic", topic)
 		if err := s.mqtt.Subscribe(topic, s.enqueue); err != nil {
+			return err
+		}
+	}
+	// Usually zigbee/# already covers it; a second, overlapping subscription
+	// would deliver every log line twice.
+	if s.sceneRetry.cfg.enabled() && !slices.ContainsFunc(s.topics, func(f string) bool { return topicMatches(f, z2mLoggingTopic) }) {
+		slog.Info("Subscribing to z2m logging for scene recall retries", "topic", z2mLoggingTopic)
+		if err := s.mqtt.Subscribe(z2mLoggingTopic, s.enqueue); err != nil {
 			return err
 		}
 	}
@@ -197,6 +215,8 @@ func (s *Service) shutdown(sub *natsgo.Subscription, workerDone <-chan struct{})
 		}
 	}
 
+	s.sceneRetry.close()
+
 	// Disconnecting first lets the broker queue new messages in the persistent
 	// session for the next pod instead of handing them to this one.
 	slog.Info("Shutting down: disconnecting MQTT")
@@ -222,6 +242,13 @@ func (s *Service) handleMQTTMessage(mqttTopic string, payload []byte, retained b
 	slog.Debug("Received MQTT message", "topic", mqttTopic, "payload", string(payload), "retained", retained)
 
 	if isCommandTopic(mqttTopic) {
+		return
+	}
+
+	if mqttTopic == z2mLoggingTopic {
+		if !retained {
+			s.sceneRetry.handleLog(payload)
+		}
 		return
 	}
 
@@ -478,6 +505,7 @@ func (s *Service) handleAction(msg *natsgo.Msg) {
 				slog.Info("Recalling Zigbee Scene by String (Fallback)", "group", req.TargetEntity, "scene", sceneCmd.SceneId)
 			}
 
+			s.sceneRetry.remember(req.TargetEntity, z2mTopic, z2mPayload)
 			s.mqtt.Publish(z2mTopic, z2mPayload)
 		}
 		return

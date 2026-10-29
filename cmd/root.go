@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/dennisschroeder/mqtt-nats-connector/internal/logic"
 	"github.com/dennisschroeder/mqtt-nats-connector/internal/transport/mqtt"
@@ -20,6 +21,10 @@ var (
 	clientID     string
 	mirrorTopics string
 	logLevel     string
+
+	sceneRetryDelays []time.Duration
+	sceneRetryMax    int
+	sceneRetryWindow time.Duration
 )
 
 var rootCmd = &cobra.Command{
@@ -51,6 +56,11 @@ var rootCmd = &cobra.Command{
 
 		topics := strings.Split(mirrorTopics, ",")
 		svc := logic.NewService(mClient, nClient, topics)
+		svc.SetSceneRetry(logic.SceneRetryConfig{
+			Delays:     sceneRetryDelays,
+			MaxRetries: sceneRetryMax,
+			Window:     sceneRetryWindow,
+		})
 
 		// Run disconnects MQTT itself during shutdown; NATS goes last because
 		// queued MQTT messages are still published to it.
@@ -76,4 +86,9 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&clientID, "client-id", "mqtt-nats-connector", "Client ID")
 	rootCmd.PersistentFlags().StringVar(&mirrorTopics, "topics", "presence/#,waste/#", "Comma-separated topics to mirror")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
+
+	retry := logic.DefaultSceneRetryConfig()
+	rootCmd.PersistentFlags().DurationSliceVar(&sceneRetryDelays, "scene-retry-delays", retry.Delays, "Delays before each Zigbee scene recall retry after z2m reports a transient radio error; the last one repeats")
+	rootCmd.PersistentFlags().IntVar(&sceneRetryMax, "scene-retry-max", retry.MaxRetries, "Max retries of a failed Zigbee scene recall (0 disables)")
+	rootCmd.PersistentFlags().DurationVar(&sceneRetryWindow, "scene-retry-window", retry.Window, "How long after a Zigbee scene recall a reported failure still triggers a retry")
 }

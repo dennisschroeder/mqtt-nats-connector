@@ -80,7 +80,23 @@ type Service struct {
 	resyncChanged, resyncUnchanged, resyncFailed int
 }
 
-func NewService(m mqttClient, n natsClient, topics []string) *Service {
+// Option customizes a Service in NewService.
+type Option func(*options)
+
+type options struct {
+	sceneRetry SceneRetryConfig
+}
+
+// WithSceneRetry replaces DefaultSceneRetryConfig.
+func WithSceneRetry(cfg SceneRetryConfig) Option {
+	return func(o *options) { o.sceneRetry = cfg }
+}
+
+func NewService(m mqttClient, n natsClient, topics []string, opts ...Option) *Service {
+	o := options{sceneRetry: DefaultSceneRetryConfig()}
+	for _, opt := range opts {
+		opt(&o)
+	}
 	return &Service{
 		mqtt:        m,
 		nats:        n,
@@ -89,7 +105,7 @@ func NewService(m mqttClient, n natsClient, topics []string) *Service {
 		z2mScenes:   make(map[string]map[string]int),
 		inbox:       make(chan mqttMessage, inboxSize),
 		stopping:    make(chan struct{}),
-		sceneRetry:  newSceneRetrier(DefaultSceneRetryConfig(), m.Publish),
+		sceneRetry:  newSceneRetrier(o.sceneRetry, m.Publish),
 		transformers: []Transformer{
 			&Z2MTransformer{},
 			&FritzTransformer{},
@@ -101,12 +117,6 @@ func NewService(m mqttClient, n natsClient, topics []string) *Service {
 			&ESPHomeTransformer{},
 		},
 	}
-}
-
-// SetSceneRetry replaces the default scene recall retry settings; call it
-// before Run.
-func (s *Service) SetSceneRetry(cfg SceneRetryConfig) {
-	s.sceneRetry = newSceneRetrier(cfg, s.mqtt.Publish)
 }
 
 func (s *Service) Run(ctx context.Context) error {
@@ -215,7 +225,7 @@ func (s *Service) shutdown(sub *natsgo.Subscription, workerDone <-chan struct{})
 		}
 	}
 
-	s.sceneRetry.close()
+	s.sceneRetry.close(shutdownTimeout)
 
 	// Disconnecting first lets the broker queue new messages in the persistent
 	// session for the next pod instead of handing them to this one.
@@ -505,7 +515,7 @@ func (s *Service) handleAction(msg *natsgo.Msg) {
 				slog.Info("Recalling Zigbee Scene by String (Fallback)", "group", req.TargetEntity, "scene", sceneCmd.SceneId)
 			}
 
-			s.sceneRetry.remember(req.TargetEntity, z2mTopic, z2mPayload)
+			s.sceneRetry.remember(req.TargetEntity, z2mTopic, z2mPayload, sceneIDInt)
 			s.mqtt.Publish(z2mTopic, z2mPayload)
 		}
 		return

@@ -55,12 +55,11 @@ var rootCmd = &cobra.Command{
 		defer stop()
 
 		topics := strings.Split(mirrorTopics, ",")
-		svc := logic.NewService(mClient, nClient, topics)
-		svc.SetSceneRetry(logic.SceneRetryConfig{
+		svc := logic.NewService(mClient, nClient, topics, logic.WithSceneRetry(logic.SceneRetryConfig{
 			Delays:     sceneRetryDelays,
 			MaxRetries: sceneRetryMax,
 			Window:     sceneRetryWindow,
-		})
+		}))
 
 		// Run disconnects MQTT itself during shutdown; NATS goes last because
 		// queued MQTT messages are still published to it.

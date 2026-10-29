@@ -1,9 +1,11 @@
 package logic
 
 import (
+	"bytes"
 	"encoding/json"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +28,10 @@ var transientZigbeeErrors = []string{
 // Publish 'set' 'scene_recall' to 'kt_lights' failed: 'Error: Command 6 genScenes.recall(...) failed (...)'
 var z2mPublishFailedRe = regexp.MustCompile(`(?s)Publish '([^']+)' '([^']+)' to '([^']+)' failed: '(.*)'`)
 
+// z2mSceneIDRe extracts the scene from zigbee-herdsman's failed command, e.g.
+// genScenes.recall({"groupid":6,"sceneid":2}).
+var z2mSceneIDRe = regexp.MustCompile(`"sceneid":\s*(\d+)`)
+
 type z2mPublishFailure struct {
 	Key    string
 	Target string
@@ -45,6 +51,15 @@ func parseZ2MPublishFailure(payload []byte) (z2mPublishFailure, bool) {
 		return z2mPublishFailure{}, false
 	}
 	return z2mPublishFailure{Key: m[2], Target: m[3], Error: m[4]}, true
+}
+
+func (f z2mPublishFailure) sceneID() (int, bool) {
+	m := z2mSceneIDRe.FindStringSubmatch(f.Error)
+	if m == nil {
+		return 0, false
+	}
+	id, err := strconv.Atoi(m[1])
+	return id, err == nil
 }
 
 func (f z2mPublishFailure) transient() bool {
@@ -84,9 +99,13 @@ func (c SceneRetryConfig) delay(retry int) time.Duration {
 
 type stopper interface{ Stop() bool }
 
+// noSceneID marks a recall by scene name, whose numeric ID is unknown.
+const noSceneID = -1
+
 type sceneRecall struct {
 	topic   string
 	payload []byte
+	sceneID int // noSceneID for a recall by name
 	sentAt  time.Time
 	retries int
 	timer   stopper // non-nil while a retry is scheduled but not yet sent
@@ -105,6 +124,10 @@ type sceneRetrier struct {
 	mu      sync.Mutex
 	recalls map[string]*sceneRecall // z2m group -> last recall sent to it
 	closed  bool
+
+	// Counts retries past the closed check, so close can wait for their
+	// publish before MQTT disconnects.
+	inflight sync.WaitGroup
 }
 
 func newSceneRetrier(cfg SceneRetryConfig, publish func(topic string, payload []byte) error) *sceneRetrier {
@@ -119,7 +142,7 @@ func newSceneRetrier(cfg SceneRetryConfig, publish func(topic string, payload []
 
 // remember records a recall right before it is published. A newer recall for
 // the same group supersedes a pending retry of the older one.
-func (r *sceneRetrier) remember(group, topic string, payload []byte) {
+func (r *sceneRetrier) remember(group, topic string, payload []byte, sceneID int) {
 	if !r.cfg.enabled() {
 		return
 	}
@@ -128,12 +151,19 @@ func (r *sceneRetrier) remember(group, topic string, payload []byte) {
 	if old := r.recalls[group]; old != nil && old.timer != nil {
 		old.timer.Stop()
 	}
-	r.recalls[group] = &sceneRecall{topic: topic, payload: payload, sentAt: r.now()}
+	r.recalls[group] = &sceneRecall{topic: topic, payload: payload, sceneID: sceneID, sentAt: r.now()}
 }
 
 // handleLog evaluates a zigbee/bridge/logging message. It only schedules the
 // retry, so the MQTT inbox worker is never blocked.
+//
+// z2m names only the group, and HA or the z2m frontend recall scenes on the
+// same groups, so a failure counts as ours only if its scene ID matches the
+// one we recalled. Anything else is left alone, including our entry.
 func (r *sceneRetrier) handleLog(payload []byte) {
+	if !r.cfg.enabled() || !bytes.Contains(payload, []byte("scene_recall")) {
+		return
+	}
 	f, ok := parseZ2MPublishFailure(payload)
 	if !ok || f.Key != "scene_recall" {
 		return
@@ -146,7 +176,26 @@ func (r *sceneRetrier) handleLog(payload []byte) {
 		slog.Debug("Ignoring Zigbee scene recall failure without a recall of ours", "group", f.Target)
 		return
 	}
-	if rec.timer != nil {
+	expired := r.now().Sub(rec.sentAt) > r.cfg.Window
+	if expired && rec.retries == 0 {
+		// Our recall went through; the failure belongs to a later command.
+		delete(r.recalls, f.Target)
+		slog.Debug("Ignoring Zigbee scene recall failure outside the retry window", "group", f.Target)
+		return
+	}
+
+	sceneID, hasID := f.sceneID()
+	switch {
+	case rec.sceneID == noSceneID:
+		slog.Info("Not retrying Zigbee scene recall by name, failure cannot be attributed to it", "group", f.Target, "payload", string(rec.payload), "error", f.Error)
+		return
+	case !hasID:
+		slog.Info("Not retrying Zigbee scene recall, failure names no scene ID", "group", f.Target, "payload", string(rec.payload), "error", f.Error)
+		return
+	case sceneID != rec.sceneID:
+		slog.Debug("Ignoring Zigbee scene recall failure of another scene", "group", f.Target, "scene_id", sceneID, "ours", rec.sceneID)
+		return
+	case rec.timer != nil:
 		slog.Debug("Ignoring Zigbee scene recall failure, retry already scheduled", "group", f.Target)
 		return
 	}
@@ -154,8 +203,8 @@ func (r *sceneRetrier) handleLog(payload []byte) {
 	switch {
 	case !f.transient():
 		slog.Warn("Zigbee scene recall failed with a non-transient error, not retrying", "group", f.Target, "payload", string(rec.payload), "error", f.Error)
-	case r.now().Sub(rec.sentAt) > r.cfg.Window:
-		slog.Warn("Giving up Zigbee scene recall, failure reported after the retry window", "group", f.Target, "payload", string(rec.payload), "window", r.cfg.Window, "error", f.Error)
+	case expired:
+		slog.Warn("Giving up Zigbee scene recall, retry failed after the retry window", "group", f.Target, "payload", string(rec.payload), "retries", rec.retries, "window", r.cfg.Window, "error", f.Error)
 	case rec.retries >= r.cfg.MaxRetries:
 		slog.Warn("Giving up Zigbee scene recall, retries exhausted", "group", f.Target, "payload", string(rec.payload), "retries", rec.retries, "error", f.Error)
 	default:
@@ -182,7 +231,9 @@ func (r *sceneRetrier) retry(group string, rec *sceneRecall) {
 		return
 	}
 	attempt := rec.retries
+	r.inflight.Add(1)
 	r.mu.Unlock()
+	defer r.inflight.Done()
 
 	slog.Info("Retrying Zigbee scene recall", "group", group, "payload", string(rec.payload), "attempt", attempt, "max", r.cfg.MaxRetries)
 	if err := r.publish(rec.topic, rec.payload); err != nil {
@@ -190,15 +241,27 @@ func (r *sceneRetrier) retry(group string, rec *sceneRecall) {
 	}
 }
 
-// close cancels pending retries; it runs before MQTT disconnects.
-func (r *sceneRetrier) close() {
+// close cancels pending retries and waits for one being published, so none
+// publishes after MQTT disconnects.
+func (r *sceneRetrier) close(timeout time.Duration) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.closed = true
 	for _, rec := range r.recalls {
 		if rec.timer != nil {
 			rec.timer.Stop()
 		}
+	}
+	r.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		r.inflight.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		slog.Warn("Timed out waiting for Zigbee scene recall retry to publish")
 	}
 }
 

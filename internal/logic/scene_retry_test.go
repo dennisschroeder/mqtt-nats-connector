@@ -1,8 +1,13 @@
 package logic
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -24,22 +29,23 @@ func TestParseZ2MPublishFailure(t *testing.T) {
 		key       string
 		target    string
 		transient bool
+		sceneID   int // -1: none
 	}{
-		{name: "no channel access", payload: noChannelAccessLog, ok: true, key: "scene_recall", target: "kt_lights", transient: true},
+		{name: "no channel access", payload: noChannelAccessLog, ok: true, key: "scene_recall", target: "kt_lights", transient: true, sceneID: 2},
 		{
 			name:    "channel access failure with namespace field",
 			payload: `{"level":"error","namespace":"z2m","message":"Publish 'set' 'scene_recall' to 'lr_lights' failed: 'Error: ZCL command failed (MacChannelAccessFailure (0xe1))'"}`,
-			ok:      true, key: "scene_recall", target: "lr_lights", transient: true,
+			ok:      true, key: "scene_recall", target: "lr_lights", transient: true, sceneID: -1,
 		},
 		{
 			name:    "non-transient error",
 			payload: `{"level":"error","message":"z2m: Publish 'set' 'scene_recall' to 'kt_lights' failed: 'Error: ZCL command 0x1/kt_lights genScenes.recall failed (Status 'NOT_FOUND')'"}`,
-			ok:      true, key: "scene_recall", target: "kt_lights", transient: false,
+			ok:      true, key: "scene_recall", target: "kt_lights", transient: false, sceneID: -1,
 		},
 		{
 			name:    "other key",
 			payload: `{"level":"error","message":"z2m: Publish 'set' 'state' to 'kt_island' failed: 'Error: MacNoChannelAccess'"}`,
-			ok:      true, key: "state", target: "kt_island", transient: true,
+			ok:      true, key: "state", target: "kt_island", transient: true, sceneID: -1,
 		},
 		{name: "info level", payload: `{"level":"info","message":"z2m: Publish 'set' 'scene_recall' to 'kt_lights' failed: 'MacNoChannelAccess'"}`},
 		{name: "unrelated error", payload: `{"level":"error","message":"z2m: MQTT error: connect ECONNREFUSED"}`},
@@ -56,6 +62,13 @@ func TestParseZ2MPublishFailure(t *testing.T) {
 			}
 			if f.Key != tt.key || f.Target != tt.target || f.transient() != tt.transient {
 				t.Errorf("got key %q target %q transient %v, want %q %q %v", f.Key, f.Target, f.transient(), tt.key, tt.target, tt.transient)
+			}
+			id, hasID := f.sceneID()
+			if !hasID {
+				id = -1
+			}
+			if id != tt.sceneID {
+				t.Errorf("scene ID %d, want %d", id, tt.sceneID)
 			}
 		})
 	}
@@ -79,6 +92,12 @@ func TestTopicMatches(t *testing.T) {
 			t.Errorf("topicMatches(%q) = %v, want %v", tt.filter, got, tt.want)
 		}
 	}
+}
+
+func sceneFailureLog(group string, sceneID int, status string) string {
+	msg := fmt.Sprintf(`z2m: Publish 'set' 'scene_recall' to '%s' failed: 'Error: Command 6 genScenes.recall({"groupid":6,"sceneid":%d}) failed (%s)'`, group, sceneID, status)
+	b, _ := json.Marshal(map[string]string{"level": "error", "message": msg})
+	return string(b)
 }
 
 type fakeTimer struct {
@@ -130,7 +149,7 @@ func (h *retryHarness) fire(t *testing.T) {
 
 func TestSceneRetryRetriesTransientFailure(t *testing.T) {
 	h := newRetryHarness()
-	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`))
+	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`), 2)
 
 	h.r.handleLog([]byte(noChannelAccessLog))
 	if len(h.timers) != 1 || h.timers[0].delay != 200*time.Millisecond {
@@ -150,7 +169,7 @@ func TestSceneRetryRetriesTransientFailure(t *testing.T) {
 
 func TestSceneRetryStopsAfterMaxRetries(t *testing.T) {
 	h := newRetryHarness()
-	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`))
+	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`), 2)
 
 	for _, wantDelay := range []time.Duration{200 * time.Millisecond, 500 * time.Millisecond} {
 		h.r.handleLog([]byte(noChannelAccessLog))
@@ -171,11 +190,12 @@ func TestSceneRetryStopsAfterMaxRetries(t *testing.T) {
 
 func TestSceneRetryIgnoresNonTransientAndUnknownFailures(t *testing.T) {
 	h := newRetryHarness()
-	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`))
+	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`), 2)
 
-	h.r.handleLog([]byte(`{"level":"error","message":"z2m: Publish 'set' 'scene_recall' to 'lr_lights' failed: 'Error: MacNoChannelAccess'"}`))
+	h.r.handleLog([]byte(sceneFailureLog("lr_lights", 2, "MacNoChannelAccess")))
 	h.r.handleLog([]byte(`{"level":"error","message":"z2m: Publish 'set' 'state' to 'kt_lights' failed: 'Error: MacNoChannelAccess'"}`))
-	h.r.handleLog([]byte(`{"level":"error","message":"z2m: Publish 'set' 'scene_recall' to 'kt_lights' failed: 'Error: Status 'NOT_FOUND''"}`))
+	h.r.handleLog([]byte(`{"level":"error","message":"z2m: Publish 'set' 'scene_recall' to 'kt_lights' failed: 'Error: MacNoChannelAccess'"}`)) // no scene ID
+	h.r.handleLog([]byte(sceneFailureLog("kt_lights", 2, "Status 'NOT_FOUND'")))
 
 	if len(h.timers) != 0 {
 		t.Errorf("scheduled %d retries, want none", len(h.timers))
@@ -184,7 +204,7 @@ func TestSceneRetryIgnoresNonTransientAndUnknownFailures(t *testing.T) {
 
 func TestSceneRetryExpires(t *testing.T) {
 	h := newRetryHarness()
-	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`))
+	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`), 2)
 	h.now = h.now.Add(5*time.Second + time.Millisecond)
 
 	h.r.handleLog([]byte(noChannelAccessLog))
@@ -193,7 +213,7 @@ func TestSceneRetryExpires(t *testing.T) {
 	}
 
 	// A retry scheduled in time is dropped if the window elapses before it fires.
-	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`))
+	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`), 2)
 	h.now = h.now.Add(4900 * time.Millisecond)
 	h.r.handleLog([]byte(noChannelAccessLog))
 	h.fire(t)
@@ -204,11 +224,11 @@ func TestSceneRetryExpires(t *testing.T) {
 
 func TestSceneRetryNewRecallSupersedesPendingRetry(t *testing.T) {
 	h := newRetryHarness()
-	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`))
+	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`), 2)
 	h.r.handleLog([]byte(noChannelAccessLog))
 	old := h.timers[0]
 
-	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":3}`))
+	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":3}`), 3)
 	if !old.stopped {
 		t.Error("pending retry of the superseded recall not stopped")
 	}
@@ -223,8 +243,7 @@ func TestSceneRetryNewRecallSupersedesPendingRetry(t *testing.T) {
 func TestServiceRetriesSceneRecallOnZ2MFailure(t *testing.T) {
 	m := &fakeMQTT{handlers: map[string]mqtt.MessageHandler{}}
 	n := newFakeNATS()
-	svc := NewService(m, n, []string{"ccu2/#"})
-	svc.SetSceneRetry(SceneRetryConfig{Delays: []time.Duration{time.Millisecond}, MaxRetries: 2, Window: 5 * time.Second})
+	svc := NewService(m, n, []string{"ccu2/#"}, WithSceneRetry(SceneRetryConfig{Delays: []time.Duration{time.Millisecond}, MaxRetries: 2, Window: 5 * time.Second}))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -282,4 +301,134 @@ func TestServiceDoesNotDoubleSubscribeZ2MLogging(t *testing.T) {
 	if _, ok := m.handlers[z2mLoggingTopic]; ok {
 		t.Errorf("subscribed to %s although zigbee/# covers it", z2mLoggingTopic)
 	}
+}
+
+// HA or the z2m frontend recall other scenes on the same groups; their
+// failures must neither resend our scene nor drop our pending retry.
+func TestSceneRetryIgnoresFailureOfAnotherScene(t *testing.T) {
+	h := newRetryHarness()
+	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`), 2)
+
+	h.r.handleLog([]byte(sceneFailureLog("kt_lights", 5, "MacNoChannelAccess (0xe1)")))
+	if len(h.timers) != 0 {
+		t.Fatal("failure of scene 5 scheduled a retry of scene 2")
+	}
+	h.r.handleLog([]byte(sceneFailureLog("kt_lights", 5, "Status 'NOT_FOUND'")))
+	if _, ok := h.r.recalls["kt_lights"]; !ok {
+		t.Fatal("foreign non-transient failure dropped our recall")
+	}
+
+	h.r.handleLog([]byte(noChannelAccessLog))
+	if len(h.timers) != 1 {
+		t.Errorf("own failure after foreign ones scheduled %d retries, want 1", len(h.timers))
+	}
+}
+
+func TestSceneRetryDoesNotRetryRecallByName(t *testing.T) {
+	h := newRetryHarness()
+	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":"evening"}`), noSceneID)
+
+	h.r.handleLog([]byte(noChannelAccessLog))
+	if len(h.timers) != 0 {
+		t.Error("recall by name was retried although the failure cannot be attributed")
+	}
+}
+
+func TestSceneRetryDropsExpiredRecallSilently(t *testing.T) {
+	h := newRetryHarness()
+	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`), 2)
+	h.now = h.now.Add(time.Minute)
+
+	logs := captureLogs(t)
+	h.r.handleLog([]byte(noChannelAccessLog))
+	if strings.Contains(logs.String(), "level=WARN") {
+		t.Errorf("failure after a successful recall logged a warning: %s", logs)
+	}
+	if _, ok := h.r.recalls["kt_lights"]; ok {
+		t.Error("expired recall not dropped")
+	}
+}
+
+func TestSceneRetryDisabledIgnoresLogs(t *testing.T) {
+	h := newRetryHarness()
+	h.r.cfg.MaxRetries = 0
+	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`), 2)
+	h.r.handleLog([]byte(noChannelAccessLog))
+	if len(h.r.recalls) != 0 || len(h.timers) != 0 {
+		t.Error("disabled retrier remembered or scheduled something")
+	}
+}
+
+// A retry already past the closed check must finish publishing before close
+// returns, and no retry may publish afterwards.
+func TestSceneRetryNoPublishAfterClose(t *testing.T) {
+	h := newRetryHarness()
+	entered, release := make(chan struct{}), make(chan struct{})
+	h.r.publish = func(topic string, payload []byte) error {
+		close(entered)
+		<-release
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.published = append(h.published, topic+" "+string(payload))
+		return nil
+	}
+	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`), 2)
+	h.r.handleLog([]byte(noChannelAccessLog))
+	go h.timers[0].fn()
+	<-entered
+
+	closed := make(chan struct{})
+	go func() {
+		h.r.close(time.Second)
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("close returned while a retry was still publishing")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	<-closed
+
+	// Simulate a second retry whose timer was already firing when close ran.
+	h.r.mu.Lock()
+	h.r.closed = false
+	h.r.mu.Unlock()
+	h.r.handleLog([]byte(noChannelAccessLog))
+	h.r.mu.Lock()
+	h.r.closed = true
+	h.r.mu.Unlock()
+	h.timers[len(h.timers)-1].fn()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.published) != 1 {
+		t.Errorf("published %v, want only the retry that was in flight", h.published)
+	}
+}
+
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func captureLogs(t *testing.T) *syncBuffer {
+	t.Helper()
+	buf := &syncBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf
 }

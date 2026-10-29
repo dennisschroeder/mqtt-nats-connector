@@ -3,6 +3,7 @@ package logic
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"regexp"
 	"strconv"
@@ -89,6 +90,23 @@ func DefaultSceneRetryConfig() SceneRetryConfig {
 	}
 }
 
+// Validate rejects negative settings; zero MaxRetries, Window or no Delays
+// disable the retry.
+func (c SceneRetryConfig) Validate() error {
+	for _, d := range c.Delays {
+		if d < 0 {
+			return fmt.Errorf("scene retry delay %v is negative", d)
+		}
+	}
+	if c.MaxRetries < 0 {
+		return fmt.Errorf("scene retry max %d is negative", c.MaxRetries)
+	}
+	if c.Window < 0 {
+		return fmt.Errorf("scene retry window %v is negative", c.Window)
+	}
+	return nil
+}
+
 func (c SceneRetryConfig) enabled() bool {
 	return c.MaxRetries > 0 && len(c.Delays) > 0 && c.Window > 0
 }
@@ -103,12 +121,13 @@ type stopper interface{ Stop() bool }
 const noSceneID = -1
 
 type sceneRecall struct {
-	topic   string
-	payload []byte
-	sceneID int // noSceneID for a recall by name
-	sentAt  time.Time
-	retries int
-	timer   stopper // non-nil while a retry is scheduled but not yet sent
+	topic    string
+	payload  []byte
+	sceneID  int       // noSceneID for a recall by name
+	sentAt   time.Time // original recall; bounds the retries
+	lastSent time.Time // original recall or latest retry
+	retries  int
+	timer    stopper // non-nil while a retry is scheduled but not yet sent
 }
 
 // sceneRetrier resends a Zigbee scene recall when z2m reports that sending it
@@ -151,7 +170,24 @@ func (r *sceneRetrier) remember(group, topic string, payload []byte, sceneID int
 	if old := r.recalls[group]; old != nil && old.timer != nil {
 		old.timer.Stop()
 	}
-	r.recalls[group] = &sceneRecall{topic: topic, payload: payload, sceneID: sceneID, sentAt: r.now()}
+	now := r.now()
+	r.recalls[group] = &sceneRecall{topic: topic, payload: payload, sceneID: sceneID, sentAt: now, lastSent: now}
+}
+
+// forget drops the recall of a group when the connector sends it another
+// command, so a pending retry cannot undo that newer command.
+func (r *sceneRetrier) forget(group string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec := r.recalls[group]
+	if rec == nil {
+		return
+	}
+	if rec.timer != nil {
+		rec.timer.Stop()
+		slog.Info("Cancelling Zigbee scene recall retry, superseded by a newer command", "group", group, "payload", string(rec.payload))
+	}
+	delete(r.recalls, group)
 }
 
 // handleLog evaluates a zigbee/bridge/logging message. It only schedules the
@@ -176,9 +212,8 @@ func (r *sceneRetrier) handleLog(payload []byte) {
 		slog.Debug("Ignoring Zigbee scene recall failure without a recall of ours", "group", f.Target)
 		return
 	}
-	expired := r.now().Sub(rec.sentAt) > r.cfg.Window
-	if expired && rec.retries == 0 {
-		// Our recall went through; the failure belongs to a later command.
+	if rec.timer == nil && r.now().Sub(rec.lastSent) > r.cfg.Window {
+		// Our last send went through; the failure belongs to a later command.
 		delete(r.recalls, f.Target)
 		slog.Debug("Ignoring Zigbee scene recall failure outside the retry window", "group", f.Target)
 		return
@@ -203,8 +238,6 @@ func (r *sceneRetrier) handleLog(payload []byte) {
 	switch {
 	case !f.transient():
 		slog.Warn("Zigbee scene recall failed with a non-transient error, not retrying", "group", f.Target, "payload", string(rec.payload), "error", f.Error)
-	case expired:
-		slog.Warn("Giving up Zigbee scene recall, retry failed after the retry window", "group", f.Target, "payload", string(rec.payload), "retries", rec.retries, "window", r.cfg.Window, "error", f.Error)
 	case rec.retries >= r.cfg.MaxRetries:
 		slog.Warn("Giving up Zigbee scene recall, retries exhausted", "group", f.Target, "payload", string(rec.payload), "retries", rec.retries, "error", f.Error)
 	default:
@@ -230,6 +263,7 @@ func (r *sceneRetrier) retry(group string, rec *sceneRecall) {
 		slog.Warn("Giving up Zigbee scene recall, retry window elapsed", "group", group, "payload", string(rec.payload), "window", r.cfg.Window)
 		return
 	}
+	rec.lastSent = r.now()
 	attempt := rec.retries
 	r.inflight.Add(1)
 	r.mu.Unlock()

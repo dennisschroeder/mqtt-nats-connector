@@ -129,6 +129,9 @@ func (s *Service) Run(ctx context.Context) error {
 			return err
 		}
 	}
+	if !s.sceneRetry.cfg.enabled() {
+		slog.Info("Zigbee scene recall retry disabled")
+	}
 	// Usually zigbee/# already covers it; a second, overlapping subscription
 	// would deliver every log line twice.
 	if s.sceneRetry.cfg.enabled() && !slices.ContainsFunc(s.topics, func(f string) bool { return topicMatches(f, z2mLoggingTopic) }) {
@@ -495,7 +498,7 @@ func (s *Service) handleAction(msg *natsgo.Msg) {
 			z2mTopic := fmt.Sprintf("zigbee/%s/set", req.TargetEntity)
 
 			// Try to parse sceneId as int or lookup from cache
-			sceneIDInt := -1
+			sceneIDInt := noSceneID
 			if id, err := strconv.Atoi(sceneCmd.SceneId); err == nil {
 				sceneIDInt = id
 			} else if id, ok := s.z2mSceneID(req.TargetEntity, sceneCmd.SceneId); ok {
@@ -503,7 +506,7 @@ func (s *Service) handleAction(msg *natsgo.Msg) {
 			}
 
 			var z2mPayload []byte
-			if sceneIDInt != -1 {
+			if sceneIDInt != noSceneID {
 				z2mPayload, _ = json.Marshal(map[string]interface{}{
 					"scene_recall": sceneIDInt,
 				})
@@ -582,6 +585,9 @@ func (s *Service) handleAction(msg *natsgo.Msg) {
 		}
 
 		for _, src := range sources {
+			if src == "zigbee" {
+				s.sceneRetry.forget(req.TargetEntity)
+			}
 			topic := fmt.Sprintf("%s/%s/set", src, req.TargetEntity)
 			var finalPayload []byte
 			if src == "zigbee" || src == "ccu2" {
@@ -635,6 +641,9 @@ func (s *Service) handleAction(msg *natsgo.Msg) {
 		}
 
 		for _, src := range sources {
+			if src == "zigbee" {
+				s.sceneRetry.forget(req.TargetEntity)
+			}
 			var topic string
 			if src == "ccu2" {
 				topic = fmt.Sprintf("%s/cover/%s/set", src, req.TargetEntity)

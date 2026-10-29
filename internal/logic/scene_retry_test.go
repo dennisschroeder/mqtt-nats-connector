@@ -13,6 +13,9 @@ import (
 	"time"
 
 	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/action"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/common"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/cover"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/light"
 	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/scene"
 	"github.com/dennisschroeder/mqtt-nats-connector/internal/transport/mqtt"
 	natsgo "github.com/nats-io/nats.go"
@@ -431,4 +434,89 @@ func captureLogs(t *testing.T) *syncBuffer {
 	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	return buf
+}
+
+// After our retry went through, a later failure of the same scene on the
+// group comes from someone else's recall and must stay quiet.
+func TestSceneRetryIgnoresLaterFailureAfterSuccessfulRetry(t *testing.T) {
+	for _, status := range []string{"MacNoChannelAccess (0xe1)", "Status 'NOT_FOUND'"} {
+		t.Run(status, func(t *testing.T) {
+			h := newRetryHarness()
+			h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`), 2)
+			h.r.handleLog([]byte(noChannelAccessLog))
+			h.fire(t)
+			h.now = h.now.Add(10 * time.Minute)
+
+			logs := captureLogs(t)
+			h.r.handleLog([]byte(sceneFailureLog("kt_lights", 2, status)))
+			if strings.Contains(logs.String(), "level=WARN") {
+				t.Errorf("later foreign failure logged a warning: %s", logs)
+			}
+			if len(h.timers) != 1 {
+				t.Errorf("later foreign failure scheduled a retry")
+			}
+			if _, ok := h.r.recalls["kt_lights"]; ok {
+				t.Error("stale recall not dropped")
+			}
+		})
+	}
+}
+
+func TestSceneRetryForgetCancelsPendingRetry(t *testing.T) {
+	h := newRetryHarness()
+	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`), 2)
+	h.r.handleLog([]byte(noChannelAccessLog))
+
+	h.r.forget("kt_lights")
+	if !h.timers[0].stopped {
+		t.Error("pending retry not stopped")
+	}
+	h.timers[0].fn() // a timer that already fired must not resend
+	if len(h.published) != 0 {
+		t.Errorf("forgotten recall was resent: %v", h.published)
+	}
+}
+
+// Any other command the connector sends to the group supersedes the recall.
+func TestServiceZigbeeCommandSupersedesSceneRetry(t *testing.T) {
+	for name, cmd := range map[string]*action.ActionRequest{
+		"light": {Id: "light", TargetEntity: "kt_lights", Command: &action.ActionRequest_Light{Light: &light.LightCommand{State: common.BinaryState_BINARY_STATE_OFF}}},
+		"cover": {Id: "cover", TargetEntity: "kt_lights", Command: &action.ActionRequest_Cover{Cover: &cover.CoverCommand{State: "CLOSE"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := &fakeMQTT{handlers: map[string]mqtt.MessageHandler{}}
+			svc := NewService(m, newFakeNATS(), nil, WithSceneRetry(SceneRetryConfig{Delays: []time.Duration{time.Hour}, MaxRetries: 2, Window: 5 * time.Second}))
+			svc.handleAction(&natsgo.Msg{Subject: "iot.v1.actions.test", Data: mustMarshal(t, &action.ActionRequest{
+				Id: "scene", TargetEntity: "kt_lights",
+				Command: &action.ActionRequest_Scene{Scene: &scene.SceneCommand{SceneId: "2"}},
+			})})
+			svc.handleMQTTMessage(z2mLoggingTopic, []byte(noChannelAccessLog), false)
+
+			svc.handleAction(&natsgo.Msg{Subject: "iot.v1.actions.test", Data: mustMarshal(t, cmd)})
+
+			svc.sceneRetry.mu.Lock()
+			defer svc.sceneRetry.mu.Unlock()
+			if _, ok := svc.sceneRetry.recalls["kt_lights"]; ok {
+				t.Error("scene recall still remembered after a newer command")
+			}
+		})
+	}
+}
+
+func TestSceneRetryConfigValidate(t *testing.T) {
+	if err := DefaultSceneRetryConfig().Validate(); err != nil {
+		t.Errorf("default config invalid: %v", err)
+	}
+	for name, cfg := range map[string]SceneRetryConfig{
+		"negative delay":  {Delays: []time.Duration{200 * time.Millisecond, -time.Second}, MaxRetries: 2, Window: time.Second},
+		"negative max":    {Delays: []time.Duration{time.Second}, MaxRetries: -1, Window: time.Second},
+		"negative window": {Delays: []time.Duration{time.Second}, MaxRetries: 2, Window: -time.Second},
+	} {
+		if cfg.Validate() == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	if (SceneRetryConfig{Delays: []time.Duration{time.Second}, MaxRetries: 2}).enabled() {
+		t.Error("zero window does not disable the retry")
+	}
 }

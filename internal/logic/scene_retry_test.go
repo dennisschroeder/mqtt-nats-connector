@@ -582,3 +582,30 @@ func TestSceneRetryRecoversFromPanicInRetry(t *testing.T) {
 		t.Error("close blocked: panicking retry left the in-flight count up")
 	}
 }
+
+// A panic while retry holds the lock must not leave it locked: remember runs
+// in every scene action and close in shutdown.
+func TestSceneRetryPanicUnderLockReleasesMutex(t *testing.T) {
+	h := newRetryHarness()
+	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`), 2)
+	h.r.handleLog([]byte(noChannelAccessLog))
+
+	h.r.now = func() time.Time { panic("clock failed") }
+	h.timers[0].fn()
+	h.r.now = func() time.Time { return h.now }
+
+	done := make(chan struct{})
+	go func() {
+		h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":3}`), 3)
+		h.r.close(time.Second)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("remember/close blocked: mutex still locked after a recovered panic")
+	}
+	if len(h.published) != 0 {
+		t.Errorf("panicking retry published %v", h.published)
+	}
+}

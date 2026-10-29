@@ -273,28 +273,37 @@ func (r *sceneRetrier) retry(group string, rec *sceneRecall) {
 	// Runs on a timer goroutine, where a panic would crash the process.
 	defer recoverPanic("scene recall retry", group)
 
-	r.mu.Lock()
-	if r.closed || r.recalls[group] != rec {
-		r.mu.Unlock()
+	attempt, ok := r.startRetry(group, rec)
+	if !ok {
 		return
 	}
-	rec.timer = nil
-	if r.now().Sub(rec.sentAt) > r.cfg.Window {
-		delete(r.recalls, group)
-		r.mu.Unlock()
-		slog.Warn("Giving up Zigbee scene recall, retry window elapsed", "group", group, "payload", string(rec.payload), "window", r.cfg.Window)
-		return
-	}
-	rec.lastSent = r.now()
-	attempt := rec.retries
-	r.inflight.Add(1)
-	r.mu.Unlock()
 	defer r.inflight.Done()
 
 	slog.Info("Retrying Zigbee scene recall", "group", group, "payload", string(rec.payload), "attempt", attempt, "max", r.cfg.MaxRetries)
 	if err := r.publish(rec.topic, rec.payload); err != nil {
 		slog.Error("Failed to publish Zigbee scene recall retry", "topic", rec.topic, "error", err)
 	}
+}
+
+// startRetry checks under the lock whether rec is still due and, if so,
+// registers the retry as in flight. The deferred unlock keeps a recovered
+// panic from leaving mu locked, which would block every scene action.
+func (r *sceneRetrier) startRetry(group string, rec *sceneRecall) (attempt int, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed || r.recalls[group] != rec {
+		return 0, false
+	}
+	rec.timer = nil
+	now := r.now()
+	if now.Sub(rec.sentAt) > r.cfg.Window {
+		delete(r.recalls, group)
+		slog.Warn("Giving up Zigbee scene recall, retry window elapsed", "group", group, "payload", string(rec.payload), "window", r.cfg.Window)
+		return 0, false
+	}
+	rec.lastSent = now
+	r.inflight.Add(1)
+	return rec.retries, true
 }
 
 // close cancels pending retries and waits for one being published, so none

@@ -39,15 +39,20 @@ type z2mPublishFailure struct {
 	Error  string
 }
 
-func parseZ2MPublishFailure(payload []byte) (z2mPublishFailure, bool) {
+// z2mErrorMessage returns the message of an error-level z2m log line.
+func z2mErrorMessage(payload []byte) (string, bool) {
 	var entry struct {
 		Level   string `json:"level"`
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(payload, &entry); err != nil || entry.Level != "error" {
-		return z2mPublishFailure{}, false
+		return "", false
 	}
-	m := z2mPublishFailedRe.FindStringSubmatch(entry.Message)
+	return entry.Message, true
+}
+
+func parseZ2MPublishFailure(message string) (z2mPublishFailure, bool) {
+	m := z2mPublishFailedRe.FindStringSubmatch(message)
 	if m == nil {
 		return z2mPublishFailure{}, false
 	}
@@ -90,8 +95,8 @@ func DefaultSceneRetryConfig() SceneRetryConfig {
 	}
 }
 
-// Validate rejects negative settings; zero MaxRetries, Window or no Delays
-// disable the retry.
+// Validate rejects negative settings and a window that ends before the first
+// retry could go out; zero MaxRetries, Window or no Delays disable the retry.
 func (c SceneRetryConfig) Validate() error {
 	for _, d := range c.Delays {
 		if d < 0 {
@@ -103,6 +108,9 @@ func (c SceneRetryConfig) Validate() error {
 	}
 	if c.Window < 0 {
 		return fmt.Errorf("scene retry window %v is negative", c.Window)
+	}
+	if c.enabled() && c.Delays[0] >= c.Window {
+		return fmt.Errorf("scene retry window %v must exceed the first delay %v", c.Window, c.Delays[0])
 	}
 	return nil
 }
@@ -200,8 +208,19 @@ func (r *sceneRetrier) handleLog(payload []byte) {
 	if !r.cfg.enabled() || !bytes.Contains(payload, []byte("scene_recall")) {
 		return
 	}
-	f, ok := parseZ2MPublishFailure(payload)
-	if !ok || f.Key != "scene_recall" {
+	msg, ok := z2mErrorMessage(payload)
+	if !ok {
+		return
+	}
+	f, ok := parseZ2MPublishFailure(msg)
+	if !ok {
+		// Surfaces a changed z2m log format, which would silently stop retries.
+		if strings.Contains(msg, "scene_recall") {
+			slog.Warn("Unrecognized z2m scene_recall error, not retrying", "message", truncate(msg, 160))
+		}
+		return
+	}
+	if f.Key != "scene_recall" {
 		return
 	}
 
@@ -251,6 +270,9 @@ func (r *sceneRetrier) handleLog(payload []byte) {
 }
 
 func (r *sceneRetrier) retry(group string, rec *sceneRecall) {
+	// Runs on a timer goroutine, where a panic would crash the process.
+	defer recoverPanic("scene recall retry", group)
+
 	r.mu.Lock()
 	if r.closed || r.recalls[group] != rec {
 		r.mu.Unlock()
@@ -297,6 +319,14 @@ func (r *sceneRetrier) close(timeout time.Duration) {
 	case <-time.After(timeout):
 		slog.Warn("Timed out waiting for Zigbee scene recall retry to publish")
 	}
+}
+
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 // topicMatches reports whether an MQTT topic filter (with + and # wildcards)

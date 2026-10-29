@@ -56,7 +56,11 @@ func TestParseZ2MPublishFailure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f, ok := parseZ2MPublishFailure([]byte(tt.payload))
+			msg, ok := z2mErrorMessage([]byte(tt.payload))
+			var f z2mPublishFailure
+			if ok {
+				f, ok = parseZ2MPublishFailure(msg)
+			}
 			if ok != tt.ok {
 				t.Fatalf("ok = %v, want %v", ok, tt.ok)
 			}
@@ -518,5 +522,63 @@ func TestSceneRetryConfigValidate(t *testing.T) {
 	}
 	if (SceneRetryConfig{Delays: []time.Duration{time.Second}, MaxRetries: 2}).enabled() {
 		t.Error("zero window does not disable the retry")
+	}
+}
+
+func TestSceneRetryConfigRejectsWindowBeforeFirstDelay(t *testing.T) {
+	for _, window := range []time.Duration{100 * time.Millisecond, 200 * time.Millisecond} {
+		cfg := SceneRetryConfig{Delays: []time.Duration{200 * time.Millisecond}, MaxRetries: 2, Window: window}
+		if cfg.Validate() == nil {
+			t.Errorf("window %v before the first delay accepted", window)
+		}
+	}
+	// A disabled retry needs no consistent window.
+	if err := (SceneRetryConfig{Delays: []time.Duration{time.Second}, MaxRetries: 0, Window: time.Millisecond}).Validate(); err != nil {
+		t.Errorf("disabled config rejected: %v", err)
+	}
+}
+
+func TestSceneRetryWarnsOnUnrecognizedSceneRecallError(t *testing.T) {
+	h := newRetryHarness()
+	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`), 2)
+	tail := strings.Repeat("x", 200) + "TAIL"
+	logs := captureLogs(t)
+
+	h.r.handleLog([]byte(`{"level":"error","message":"z2m: Failed to send 'scene_recall' to group 'kt_lights': MacNoChannelAccess ` + tail + `"}`))
+	out := logs.String()
+	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "Unrecognized z2m scene_recall error") {
+		t.Errorf("unrecognized scene_recall error not warned about: %s", out)
+	}
+	if strings.Contains(out, "TAIL") {
+		t.Errorf("warning carries the full message: %s", out)
+	}
+	if len(h.timers) != 0 {
+		t.Error("unrecognized error scheduled a retry")
+	}
+
+	// Unrelated lines stay quiet.
+	logs = captureLogs(t)
+	h.r.handleLog([]byte(`{"level":"info","message":"z2m: something about scene_recall"}`))
+	if strings.Contains(logs.String(), "level=WARN") {
+		t.Errorf("info line warned: %s", logs)
+	}
+}
+
+func TestSceneRetryRecoversFromPanicInRetry(t *testing.T) {
+	h := newRetryHarness()
+	h.r.publish = func(string, []byte) error { panic("publish failed") }
+	h.r.remember("kt_lights", "zigbee/kt_lights/set", []byte(`{"scene_recall":2}`), 2)
+	h.r.handleLog([]byte(noChannelAccessLog))
+	h.fire(t) // must not crash the test binary
+
+	done := make(chan struct{})
+	go func() {
+		h.r.close(time.Second)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Error("close blocked: panicking retry left the in-flight count up")
 	}
 }

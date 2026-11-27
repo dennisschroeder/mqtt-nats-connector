@@ -31,6 +31,10 @@ func (t *ESPHomeTransformer) Transform(topic string, payload []byte) (string, st
 	payloadStr := string(payload)
 
 	var event *envelope.EventEnvelope
+	// entityID also names the NATS subject. One ESPHome device publishes many
+	// components; keying them all by the bare device would make every
+	// temperature or humidity report trigger rules meant for its illuminance.
+	entityID := deviceID
 
 	if domain == "binary_sensor" {
 		state := common.BinaryState_BINARY_STATE_OFF
@@ -39,7 +43,6 @@ func (t *ESPHomeTransformer) Transform(topic string, payload []byte) (string, st
 		}
 
 		// Map occupancy/presence to standard deviceID entity to match Z2M behavior
-		entityID := deviceID
 		if component != "occupancy" && component != "presence" {
 			entityID = deviceID + "_" + component
 		}
@@ -56,8 +59,9 @@ func (t *ESPHomeTransformer) Transform(topic string, payload []byte) (string, st
 			},
 		}
 	} else if domain == "sensor" {
+		entityID = deviceID + "_" + component
 		valFloat, _ := strconv.ParseFloat(payloadStr, 64)
-		
+
 		unit := ""
 		if component == "illuminance" {
 			unit = "lx"
@@ -68,9 +72,9 @@ func (t *ESPHomeTransformer) Transform(topic string, payload []byte) (string, st
 		event = &envelope.EventEnvelope{
 			Payload: &envelope.EventEnvelope_Sensor{
 				Sensor: &sensor.SensorEvent{
-					Id:           deviceID + "_" + component,
+					Id:           entityID,
 					Source:       "esphome",
-					EntityId:     deviceID,
+					EntityId:     entityID,
 					Value:        payloadStr,
 					NumericValue: valFloat,
 					Unit:         unit,
@@ -81,5 +85,5 @@ func (t *ESPHomeTransformer) Transform(topic string, payload []byte) (string, st
 		return "esphome", deviceID, nil
 	}
 
-	return "esphome", deviceID, event
+	return "esphome", entityID, event
 }
